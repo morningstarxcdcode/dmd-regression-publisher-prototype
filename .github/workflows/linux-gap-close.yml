@@ -21,18 +21,25 @@ jobs:
           python-version: "3.12"
 
       - name: Install Linux perf
+        shell: bash
         run: |
+          set -euxo pipefail
+
+          sudo sysctl -w kernel.perf_event_paranoid=-1 || true
+          sudo sysctl -w kernel.kptr_restrict=0 || true
+
           if command -v perf >/dev/null 2>&1; then
             perf --version
             exit 0
           fi
 
           sudo apt-get update
-          sudo apt-get install -y "linux-tools-$(uname -r)" linux-tools-common || \
-            sudo apt-get install -y linux-tools-common linux-tools-generic
+          sudo apt-get install -y linux-tools-common linux-tools-generic || true
+          sudo apt-get install -y "linux-tools-$(uname -r)" || true
+          sudo apt-get install -y linux-tools-azure || true
 
           if ! command -v perf >/dev/null 2>&1; then
-            PERF_BIN="$(find /usr/lib/linux-tools -type f -name perf | sort | tail -n 1)"
+            PERF_BIN="$(find /usr/lib/linux-tools -type f -name perf 2>/dev/null | sort | tail -n 1 || true)"
             if [ -n "$PERF_BIN" ]; then
               sudo ln -sf "$PERF_BIN" /usr/local/bin/perf
             fi
@@ -41,22 +48,63 @@ jobs:
           perf --version
 
       - name: Setup Python venv
+        shell: bash
         run: |
+          set -euxo pipefail
           python3 -m venv .venv
           ./.venv/bin/pip install --upgrade pip
           ./.venv/bin/pip install matplotlib
 
       - name: Install DMD nightly
+        shell: bash
         run: |
+          set -euxo pipefail
           curl -fsSL https://dlang.org/install.sh | bash -s -- -p ./.locald install dmd-nightly
           ./.locald/dmd-nightly/linux/bin64/dmd --version
 
-      - name: Run Linux gap close gates
+      - name: Checkout DMD source for parser prototype
+        shell: bash
         run: |
+          set -euxo pipefail
+          git clone --depth 1 --recurse-submodules https://github.com/dlang/dmd external/dmd
+          git -C external/dmd apply "$GITHUB_WORKSPACE/patches/external_dmd_parser_parallel_prototype.patch"
+
+      - name: Build parser prototype DMD
+        shell: bash
+        run: |
+          set -euxo pipefail
+          chmod +x build_parser_threaded_dmd.sh
+          THREADED_DMD="$(./build_parser_threaded_dmd.sh --host-dmd ./.locald/dmd-nightly/linux/bin64/dmd --build-mode debug)"
+          echo "THREADED_DMD=$THREADED_DMD" >> "$GITHUB_ENV"
+          "$THREADED_DMD" --version
+
+      - name: Run Linux gap close gates
+        shell: bash
+        run: |
+          set -euxo pipefail
           chmod +x linux_gap_close.sh
           ./linux_gap_close.sh \
             --python-bin ./.venv/bin/python \
-            --dmd-bin ./.locald/dmd-nightly/linux/bin64/dmd
+            --dmd-bin "$THREADED_DMD"
+
+      - name: Run Linux parser comparison
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [[ -z "${THREADED_DMD:-}" ]]; then
+            echo "THREADED_DMD missing; skipping parser comparison because prototype build did not complete."
+            exit 0
+          fi
+          chmod +x parser_threading_compare.sh
+          ./parser_threading_compare.sh \
+            --python-bin ./.venv/bin/python \
+            --baseline-dmd ./.locald/dmd-nightly/linux/bin64/dmd \
+            --threaded-dmd "$THREADED_DMD" \
+            --threads 1,2,4 \
+            --repeats 3 \
+            --file-count 64 \
+            --out-dir artifacts/linux_gap_close/parser_thread_compare_linux
 
       - name: Upload Linux gap-close artifacts
         if: always()

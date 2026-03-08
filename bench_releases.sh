@@ -16,6 +16,42 @@ TIMEOUT_SEC=120
 TRACK="both" # latest20 | compatible20 | both
 DMD_ARCHIVE_FLAVOR=""
 
+resolve_extracted_dmd_path() {
+    local extract_dir="$1"
+    local -a candidates=()
+    local candidate=""
+
+    case "$DMD_ARCHIVE_FLAVOR" in
+        osx)
+            candidates=(
+                "$extract_dir/osx/bin/dmd"
+                "$extract_dir/osx/bin64/dmd"
+            )
+            ;;
+        linux)
+            candidates=(
+                "$extract_dir/linux/bin64/dmd"
+                "$extract_dir/linux/bin/dmd"
+            )
+            ;;
+    esac
+
+    for candidate in "${candidates[@]}"; do
+        if [[ -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    candidate="$(find "$extract_dir" -type f \( -path '*/bin/dmd' -o -path '*/bin64/dmd' \) 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+
+    return 1
+}
+
 resolve_archive_flavor() {
     local uname_s
     uname_s="$(uname -s 2>/dev/null || echo unknown)"
@@ -249,7 +285,9 @@ run_track() {
         local extract_dir="$CACHE_DIR/dmd-${version}-${DMD_ARCHIVE_FLAVOR}"
         local url="https://downloads.dlang.org/releases/2.x/${version}/dmd.${version}.${DMD_ARCHIVE_FLAVOR}.tar.xz"
 
-        if [[ ! -x "$extract_dir/osx/bin/dmd" ]]; then
+        local dmd_bin=""
+        dmd_bin="$(resolve_extracted_dmd_path "$extract_dir" || true)"
+        if [[ -z "$dmd_bin" ]]; then
             mkdir -p "$extract_dir"
             if [[ ! -f "$tarball" ]]; then
                 if ! curl -fL --retry 3 --retry-delay 2 -o "$tarball" "$url" >/dev/null 2>&1; then
@@ -272,16 +310,7 @@ run_track() {
             fi
         fi
 
-        local dmd_bin="$extract_dir/${DMD_ARCHIVE_FLAVOR}/bin/dmd"
-        if [[ ! -x "$dmd_bin" ]]; then
-            dmd_bin="$extract_dir/${DMD_ARCHIVE_FLAVOR}/bin64/dmd"
-        fi
-        if [[ ! -x "$dmd_bin" ]]; then
-            dmd_bin="$(
-                find "$extract_dir" -type f \( -path '*/bin/dmd' -o -path '*/bin64/dmd' \) 2>/dev/null \
-                    | head -n 1
-            )"
-        fi
+        dmd_bin="$(resolve_extracted_dmd_path "$extract_dir" || true)"
 
         if [[ -z "$dmd_bin" || ! -x "$dmd_bin" ]]; then
             log "[$track_name] DMD binary not found for $version"
