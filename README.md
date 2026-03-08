@@ -73,8 +73,8 @@ curl -fsSL https://dlang.org/install.sh | bash -s -- -p ./.locald install dmd-ni
 # Optional: compare baseline vs threaded parser behavior (real in-compiler path)
 ./parser_threading_compare.sh --python-bin ./.venv/bin/python --baseline-dmd ./external/dmd/generated/osx/release/64/dmd --threaded-dmd ./external/dmd/generated/osx/debug/64/dmd
 
-# Optional (Linux only): close remaining cross-platform gaps with PASS/FAIL gates
-./linux_gap_close.sh --python-bin ./.venv/bin/python --dmd-bin /path/to/dmd
+# Optional (Linux only): strict local/self-hosted gap close with real Gate-B perf requirement
+./linux_gap_close.sh --python-bin ./.venv/bin/python --gate-b-mode strict --dmd-bin /path/to/dmd
 ```
 
 ## Important Method Notes
@@ -83,6 +83,7 @@ curl -fsSL https://dlang.org/install.sh | bash -s -- -p ./.locald install dmd-ni
 - Artifact size metric is compile output object size, not linked executable size.
 - Regression trigger is intentionally conservative: percentage jump + non-overlapping bootstrap CIs.
 - The local `external/dmd` checkout is not part of the Git repo snapshot; the parser-prototype frontend change is preserved in `patches/external_dmd_parser_parallel_prototype.patch`.
+- GitHub-hosted Linux validation treats missing kernel-matched `perf` as a documented `SKIP` for Gate B; strict Linux perf closure lives in `.github/workflows/linux-gap-close-strict.yml`.
 
 ## Extra Not-Done Artifacts
 

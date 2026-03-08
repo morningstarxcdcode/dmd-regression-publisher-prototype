@@ -1,10 +1,9 @@
 # Linux Gap-Close Runbook
 
-This runbook closes the three remaining partial items:
+This runbook covers two Linux paths:
 
-1. `dmd -profile` vs Linux `perf`
-2. latest20 cross-version timing on a compatible Linux host
-3. in-compiler parser threading workflow (baseline vs candidate DMD binary)
+1. hosted validation on GitHub-hosted Linux
+2. strict closure on a Linux host with usable `perf`
 
 ## Prerequisites (Linux)
 
@@ -20,11 +19,12 @@ python3 -m venv .venv
 - D compiler binaries:
   - DMD for profile/parser experiments (`--dmd-bin`)
 
-## One-pass Linux closure
+## Strict one-pass Linux closure
 
 ```bash
 ./linux_gap_close.sh \
   --python-bin ./.venv/bin/python \
+  --gate-b-mode strict \
   --dmd-bin /path/to/dmd
 ```
 
@@ -34,17 +34,31 @@ Outputs:
 - `artifacts/linux_gap_close/not_done_linux/status.md`
 - `artifacts/linux_gap_close/summary.md`
 
-CI option:
+Hosted CI option:
 
 - GitHub Actions workflow: `.github/workflows/linux-gap-close.yml`
-- Produces uploaded artifact bundle `linux-gap-close-artifacts`
+- This is the hosted-validation workflow.
+- It allows Gate B to become `SKIP` when GitHub-hosted Ubuntu lacks a usable kernel-matched `perf`.
+- Produces uploaded artifact bundle `linux-hosted-validation-artifacts`
 
-What this gives:
+Strict CI option:
+
+- GitHub Actions workflow: `.github/workflows/linux-gap-close-strict.yml`
+- Intended for a self-hosted Linux runner with real `perf`
+- This is the only workflow that should be used to claim full Linux `dmd -profile` vs `perf` closure
+
+Strict path gives:
 
 - latest20 + compatible20 timing on Linux archives
 - `dmd_profile_compare` using Linux `perf` path
 - in-compiler parser benchmark (`parser_incompiler_parallel`)
 - PASS/FAIL gates in `summary.md` (script exits non-zero if a gate fails)
+
+Hosted workflow gives:
+
+- real Linux release timing (`latest20` + `compatible20`)
+- real Linux parser prototype execution
+- Gate B recorded as `SKIP` instead of fake `PASS` when hosted `perf` is unavailable
 
 ## Real parser-threading comparison workflow
 
@@ -77,6 +91,6 @@ Outputs:
 - Linux release trend result:
   - `artifacts/linux_gap_close/releases/latest20/results_summary.csv`
 - Linux `perf` comparison result:
-  - `artifacts/linux_gap_close/not_done_linux/dmd_profile_compare/perf_report.txt` (if produced)
+  - `artifacts/linux_gap_close/not_done_linux/profile/dmd_profile_compare/perf_report.txt` (if produced)
 - Parser candidate-vs-baseline table:
   - `artifacts/parser_thread_compare/comparison.csv`

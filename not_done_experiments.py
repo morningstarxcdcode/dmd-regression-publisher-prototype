@@ -2245,6 +2245,9 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
         return task_result(
             "dmd -profile vs perf comparison",
             "blocked",
+            profiler_backend="compiler_profile",
+            profiler_outcome="compile_failed",
+            profiler_reason="failed to compile profile target",
             reason="failed to compile profile target",
             stderr_tail=compile_cp.stderr.strip().splitlines()[-1] if compile_cp.stderr.strip() else "",
         )
@@ -2258,12 +2261,28 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
         return task_result(
             "dmd -profile vs perf comparison",
             "blocked",
+            profiler_backend="compiler_profile",
+            profiler_outcome="trace_missing",
+            profiler_reason="trace.log not produced by profiled executable",
             reason="trace.log not produced by profiled executable",
         )
 
     trace_lines = len(trace_log.read_text(encoding="utf-8", errors="ignore").splitlines())
     (task_dir / "profiled_run_stdout.txt").write_text(run_cp.stdout, encoding="utf-8")
     (task_dir / "profiled_run_stderr.txt").write_text(run_cp.stderr, encoding="utf-8")
+
+    def classify_linux_perf_failure(
+        perf_stat_stderr: str,
+        perf_record_stderr: str,
+        perf_report_stderr: str,
+    ) -> tuple[str, str]:
+        combined = "\n".join((perf_stat_stderr, perf_record_stderr, perf_report_stderr))
+        low = combined.lower()
+        if "perf not found for kernel" in low:
+            return "perf_unavailable", "hosted or local kernel-matched perf binary unavailable"
+        if "no permission to enable" in low or "operation not permitted" in low or "perf_event_paranoid" in low:
+            return "perf_permission_denied", "perf denied by kernel policy or permissions"
+        return "perf_failed", "perf commands returned non-zero"
 
     system_name = platform.system().lower()
     if system_name == "linux" and shutil.which("perf"):
@@ -2304,9 +2323,20 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
             and perf_report_cp.returncode == 0
             and perf_report_lines > 0
         )
+        profiler_outcome = "done"
+        profiler_reason = ""
+        if not ok:
+            profiler_outcome, profiler_reason = classify_linux_perf_failure(
+                perf_stat_cp.stderr,
+                perf_record_cp.stderr,
+                perf_report_cp.stderr,
+            )
         return task_result(
             "dmd -profile vs perf comparison",
             "done" if ok else "blocked",
+            profiler_backend="perf",
+            profiler_outcome=profiler_outcome,
+            profiler_reason=profiler_reason,
             methodology="linux perf",
             trace_log_lines=trace_lines,
             trace_def_exists=int(trace_def.exists()),
@@ -2340,6 +2370,9 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
         return task_result(
             "dmd -profile vs perf comparison",
             "done" if sample_cp.returncode == 0 and sample_file.exists() else "blocked",
+            profiler_backend="sample",
+            profiler_outcome="done" if sample_cp.returncode == 0 and sample_file.exists() else "sample_failed",
+            profiler_reason="" if sample_cp.returncode == 0 and sample_file.exists() else "sample tool failed",
             methodology="macOS sample (perf unavailable)",
             trace_log_lines=trace_lines,
             sample_report_lines=sample_lines,
@@ -2349,6 +2382,9 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
     return task_result(
         "dmd -profile vs perf comparison",
         "blocked",
+        profiler_backend="none",
+        profiler_outcome="unsupported_host",
+        profiler_reason="unsupported profiler setup for current host",
         reason=f"unsupported host profiler setup: platform={platform.system()} perf={int(bool(shutil.which('perf')))} sample={int(bool(shutil.which('sample')))}",
         trace_log_lines=trace_lines,
         trace_def_exists=int(trace_def.exists()),

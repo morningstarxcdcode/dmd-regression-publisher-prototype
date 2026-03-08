@@ -1,14 +1,14 @@
-name: Linux Hosted Validation
+name: Linux Gap Close Strict
 
 on:
-  push:
-    branches:
-      - master
   workflow_dispatch:
 
 jobs:
-  gap-close:
-    runs-on: ubuntu-24.04
+  gap-close-strict:
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
     timeout-minutes: 180
 
     steps:
@@ -63,11 +63,9 @@ jobs:
             sudo ln -sf "$PERF_BIN" /usr/local/bin/perf
           fi
 
-          command -v perf || true
-          if command -v perf >/dev/null 2>&1; then
-            ls -l "$(command -v perf)" || true
-            perf --version || true
-          fi
+          command -v perf
+          ls -l "$(command -v perf)"
+          perf --version
 
       - name: Setup Python venv
         shell: bash
@@ -100,14 +98,14 @@ jobs:
           echo "THREADED_DMD=$THREADED_DMD" >> "$GITHUB_ENV"
           "$THREADED_DMD" --version
 
-      - name: Run Linux gap close gates
+      - name: Run strict Linux gap close gates
         shell: bash
         run: |
           set -euxo pipefail
           chmod +x linux_gap_close.sh
           ./linux_gap_close.sh \
             --python-bin ./.venv/bin/python \
-            --gate-b-mode hosted_skip \
+            --gate-b-mode strict \
             --profile-dmd-bin ./.locald/dmd-nightly/linux/bin64/dmd \
             --parser-dmd-bin "$THREADED_DMD"
 
@@ -130,9 +128,9 @@ jobs:
             --file-count 64 \
             --out-dir artifacts/linux_gap_close/parser_thread_compare_linux
 
-      - name: Upload Linux gap-close artifacts
+      - name: Upload strict Linux gap-close artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-hosted-validation-artifacts
+          name: linux-gap-close-strict-artifacts
           path: artifacts/linux_gap_close/
