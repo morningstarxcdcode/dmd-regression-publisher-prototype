@@ -1,0 +1,9 @@
+{
+  "name": "alpha",
+  "targetType": "library",
+  "sourcePaths": ["source"],
+  "dependencies": {
+    "beta": { "path": "../beta" },
+    "gamma": { "path": "../gamma" }
+  }
+}

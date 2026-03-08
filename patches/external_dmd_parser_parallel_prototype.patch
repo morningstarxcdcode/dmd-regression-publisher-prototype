@@ -1,5 +1,321 @@
+diff --git a/compiler/src/dmd/dmodule.d b/compiler/src/dmd/dmodule.d
+index de1c8f0..63d0513 100644
+--- a/compiler/src/dmd/dmodule.d
++++ b/compiler/src/dmd/dmodule.d
+@@ -43,6 +43,8 @@ import dmd.root.port;
+ import dmd.root.string;
+ import dmd.target;
+ import dmd.visitor;
++version (ParserParallelPrototype)
++import core.internal.spinlock : SpinLock;
+ 
+ version (Windows)
+ {
+@@ -55,6 +57,32 @@ else version (Posix)
+ else
+     static assert(0);
+ 
++version (ParserParallelPrototype)
++private enum ParserParallelLockMode
++{
++    coarse,
++    narrow,
++}
++
++version (ParserParallelPrototype)
++private ParserParallelLockMode parserParallelLockMode()
++{
++    const(char)* value = getenv("DMD_PARSE_LOCK_MODE");
++    if (value && value[0] && strcmp(value, "narrow") == 0)
++        return ParserParallelLockMode.narrow;
++    return ParserParallelLockMode.coarse;
++}
++
++version (ParserParallelPrototype)
++private bool parserParallelDiagnosticsEnabled()
++{
++    const(char)* value = getenv("DMD_PARSE_DIAGNOSTICS");
++    return value && value[0] && value[0] != '0';
++}
++
++version (ParserParallelPrototype)
++private shared SpinLock parserParallelCommitLock = shared SpinLock(SpinLock.Contention.medium);
++
+ /**
+  * Remove generated .di files on error and exit
+  */
+@@ -633,6 +661,164 @@ extern (C++) final class Module : Package
+         }
+     }
+ 
++    version (ParserParallelPrototype)
++    private bool parserParallelNarrowEligible() const
++    {
++        return parserParallelLockMode() == ParserParallelLockMode.narrow
++            && importedFrom is this
++            && FileName.equalsExt(arg, mars_ext);
++    }
++
++    version (ParserParallelPrototype)
++    extern (D) Module parseModuleParallelNarrow(AST)()
++    {
++        import core.time : MonoTime;
++
++        const(char)* srcname = srcfile.toChars();
++        auto parseStart = MonoTime.currTime;
++
++        isPackageFile = isPackageFileName(srcfile);
++        const(char)[] buf = processSource(src, this);
++        if (buf is null)
++            return null;
++
++        if (buf.length >= 4 && buf[0 .. 4] == "Ddoc")
++        {
++            this.addComment(buf.ptr + 4);
++            filetype = FileType.ddoc;
++            if (!docfile)
++                setDocfile();
++            return this;
++        }
++
++        if (FileName.equalsExt(arg, dd_ext))
++        {
++            this.addComment(buf.ptr);
++            filetype = FileType.ddoc;
++            if (!docfile)
++                setDocfile();
++            return this;
++        }
++
++        if (FileName.equalsExt(arg, hdr_ext))
++            filetype = FileType.dhdr;
++
++        const bool doUnittests = global.params.parsingUnittestsRequired();
++        scope parser = new Parser!AST(this, buf, cast(bool) docfile, global.errorSink, &global.compileEnv, doUnittests);
++        parser.nextToken();
++        parser.parseModuleDeclaration();
++        auto parsedMd = parser.md;
++        auto parsedMembers = parser.parseModuleContent();
++        auto parsedNumlines = parser.linnum;
++
++        auto parseMs = (MonoTime.currTime - parseStart).total!"msecs";
++        auto commitStart = MonoTime.currTime;
++
++        parserParallelCommitLock.lock();
++        scope (exit) parserParallelCommitLock.unlock();
++        {
++            DsymbolTable dst;
++            Package ppack = null;
++
++            md = parsedMd;
++            members = parsedMembers;
++            numlines = parsedNumlines;
++
++            if (md)
++            {
++                this.ident = md.id;
++                dst = Package.resolve(md.packages, &this.parent, &ppack);
++            }
++            else
++            {
++                dst = modules;
++                if (!Identifier.isValidIdentifier(this.ident.toChars()))
++                    error(loc, "%s `%s` has non-identifier characters in filename, use module declaration instead", kind, toPrettyChars);
++            }
++
++            if (md)
++            {
++                if (md.packages.length > 0)
++                {
++                    auto pkgPath = ppack;
++                    addAccessiblePackage(pkgPath, Visibility(Visibility.Kind.private_));
++                    foreach (id; md.packages[1 .. $])
++                    {
++                        pkgPath = cast(Package) pkgPath.symtab.lookup(id);
++                        if (pkgPath is null)
++                            break;
++                        addAccessiblePackage(pkgPath, Visibility(Visibility.Kind.private_));
++                    }
++                }
++                assert(dst);
++                Module m = ppack ? ppack.isModule() : null;
++                if (m && !isPackageFileName(m.srcfile))
++                {
++                    .error(md.loc, "package name '%s' conflicts with usage as a module name in file %s", ppack.toPrettyChars(), m.srcfile.toChars());
++                }
++            }
++
++            Dsymbol s = this;
++            if (isPackageFile)
++            {
++                auto ps = dst.lookup(ident);
++                Package pkg = ps ? ps.isPackage() : null;
++                if (pkg is null)
++                {
++                    pkg = new Package(Loc.initial, ident);
++                    pkg.tag = this.tag;
++                    pkg.symtab = new DsymbolTable();
++                }
++                this.tag = pkg.tag;
++                this.pkg = pkg;
++                pkg.parent = this.parent;
++                pkg.isPkgMod = PKG.module_;
++                pkg.mod = this;
++                s = pkg;
++            }
++            if (!dst.insert(s))
++            {
++                Dsymbol prev = dst.lookup(ident);
++                assert(prev);
++                if (Module mprev = prev.isModule())
++                {
++                    if (!FileName.equals(srcname, mprev.srcfile.toChars()))
++                        error(loc, "%s `%s` from file %s conflicts with another module %s from file %s", kind, toPrettyChars, srcname, mprev.toChars(), mprev.srcfile.toChars());
++                    else if (isRoot() && mprev.isRoot())
++                        error(loc, "%s `%s` from file %s is specified twice on the command line", kind, toPrettyChars, srcname);
++                    else
++                        error(loc, "%s `%s` from file %s must be imported with 'import %s;'", kind, toPrettyChars, srcname, toPrettyChars());
++                    return mprev;
++                }
++                else if (Package pkg = prev.isPackage())
++                {
++                    if (isPackageFile)
++                        amodules.push(this);
++                    else
++                        error(md ? md.loc : loc, "%s `%s` from file %s conflicts with package name %s", kind, toPrettyChars, srcname, pkg.toChars());
++                }
++                else
++                    assert(global.errors);
++            }
++            else
++            {
++                amodules.push(this);
++            }
++            Compiler.onParseModule(this);
++        }
++
++        if (parserParallelDiagnosticsEnabled())
++        {
++            const commitMs = (MonoTime.currTime - commitStart).total!"msecs";
++            fprintf(stderr, "parse-parallel-diag module=%s mode=narrow queue_ms=0 parse_ms=%lld commit_ms=%lld total_ms=%lld\n",
++                toChars(),
++                cast(long) parseMs,
++                cast(long) commitMs,
++                cast(long) (parseMs + commitMs));
++        }
++        return this;
++    }
++
+     /**
+      * Reads the file from `srcfile` and loads the source buffer.
+      *
+@@ -697,6 +883,12 @@ extern (C++) final class Module : Package
+         timeTraceBeginEvent(TimeTraceEventType.parse);
+         scope (exit) timeTraceEndEvent(TimeTraceEventType.parse, this);
+ 
++        version (ParserParallelPrototype)
++        {
++            if (parserParallelNarrowEligible())
++                return parseModuleParallelNarrow!AST();
++        }
++
+         isPackageFile = isPackageFileName(srcfile);
+         const(char)[] buf = processSource(src, this);
+         // an error happened on UTF conversion
+diff --git a/compiler/src/dmd/identifier.d b/compiler/src/dmd/identifier.d
+index 64ffeb9..3f62e28 100644
+--- a/compiler/src/dmd/identifier.d
++++ b/compiler/src/dmd/identifier.d
+@@ -22,6 +22,14 @@ import dmd.root.string;
+ import dmd.root.stringtable;
+ import dmd.root.utf;
+ import dmd.tokens;
++version (ParserParallelPrototype)
++import core.internal.spinlock : SpinLock;
++
++version (ParserParallelPrototype)
++{
++private shared SpinLock identifierTableLock = shared SpinLock(SpinLock.Contention.medium);
++private shared SpinLock identifierCounterLock = shared SpinLock(SpinLock.Contention.brief);
++}
+ 
+ 
+ /***********************************************************
+@@ -199,6 +207,11 @@ nothrow:
+     extern (D) private static size_t newSuffix()
+     {
+         __gshared size_t i;
++        version (ParserParallelPrototype)
++        {
++            identifierCounterLock.lock();
++            scope (exit) identifierCounterLock.unlock();
++        }
+         return ++i;
+     }
+ 
+@@ -258,6 +271,11 @@ nothrow:
+ 
+         const locKey = cast(string) (sl.filename ~ idBuf[]);
+         const key = Key(locKey, prefix, parent);
++        version (ParserParallelPrototype)
++        {
++            identifierCounterLock.lock();
++            scope (exit) identifierCounterLock.unlock();
++        }
+         static if (__traits(compiles, counters.update(Key.init, () => 0u, (ref uint a) => 0u)))
+         {
+             // 2.082+
+@@ -295,6 +313,11 @@ nothrow:
+ 
+     extern (D) static Identifier idPool(scope const(char)[] s, bool isAnonymous = false)
+     {
++        version (ParserParallelPrototype)
++        {
++            identifierTableLock.lock();
++            scope (exit) identifierTableLock.unlock();
++        }
+         auto sv = stringtable.update(s);
+         auto id = sv.value;
+         if (!id)
+@@ -313,6 +336,11 @@ nothrow:
+      */
+     extern (D) static void idPool(scope const(char)[] s, TOK value)
+     {
++        version (ParserParallelPrototype)
++        {
++            identifierTableLock.lock();
++            scope (exit) identifierTableLock.unlock();
++        }
+         auto sv = stringtable.insert(s, null);
+         assert(sv);
+         auto id = new Identifier(sv.toString(), value);
+@@ -418,6 +446,11 @@ nothrow:
+ 
+     extern (D) static Identifier lookup(const(char)[] s)
+     {
++        version (ParserParallelPrototype)
++        {
++            identifierTableLock.lock();
++            scope (exit) identifierTableLock.unlock();
++        }
+         auto sv = stringtable.lookup(s);
+         if (!sv)
+             return null;
+diff --git a/compiler/src/dmd/lexer.d b/compiler/src/dmd/lexer.d
+index b5b82a9..2eda8c3 100644
+--- a/compiler/src/dmd/lexer.d
++++ b/compiler/src/dmd/lexer.d
+@@ -62,7 +62,7 @@ struct CompileEnv
+  */
+ class Lexer
+ {
+-    private __gshared OutBuffer stringbuffer;
++    private OutBuffer stringbuffer;
+ 
+     BaseLoc* baseLoc;       // Used to generate `scanloc`, which is just an index into this data structure
+     Loc scanloc;            // for error messages
 diff --git a/compiler/src/dmd/main.d b/compiler/src/dmd/main.d
-index dbbde28..f67a7dc 100644
+index dbbde28..d5014c5 100644
 --- a/compiler/src/dmd/main.d
 +++ b/compiler/src/dmd/main.d
 @@ -22,6 +22,10 @@ version (NoMain) {} else
@@ -13,7 +329,7 @@ index dbbde28..f67a7dc 100644
  
  import dmd.arraytypes : Modules, Strings;
  import dmd.astenums;
-@@ -152,6 +156,63 @@ extern (C) int _Dmain(const(char)[][] dargs)
+@@ -152,6 +156,90 @@ extern (C) int _Dmain(const(char)[][] dargs)
  
  private:
  
@@ -32,12 +348,27 @@ index dbbde28..f67a7dc 100644
 +}
 +
 +version (ParserParallelPrototype)
++private bool parserDiagnosticsEnabled()
++{
++    const(char)* v = getenv("DMD_PARSE_DIAGNOSTICS");
++    return v && v[0] && v[0] != '0';
++}
++
++version (ParserParallelPrototype)
++private bool parserLockModeIsNarrow()
++{
++    const(char)* v = getenv("DMD_PARSE_LOCK_MODE");
++    return v && v[0] && strcmp(v, "narrow") == 0;
++}
++
++version (ParserParallelPrototype)
 +private bool parseRootModulesInParallel(ref Modules modules, int threads)
 +{
 +    if (threads <= 1 || modules.length < 2)
 +        return false;
 +
 +    Object parseLock = new Object();
++    const useNarrow = parserLockModeIsNarrow();
 +
 +    Thread createParseWorker(ref Modules modulesRef, size_t start, size_t stride)
 +    {
@@ -48,8 +379,13 @@ index dbbde28..f67a7dc 100644
 +                    auto m = modulesRef[i];
 +                    if (m)
 +                    {
-+                        // Prototype safety guard: frontend globals are not thread-safe yet.
-+                        synchronized (parseLock)
++                        if (!useNarrow)
++                        {
++                            // Coarse mode preserves the original correctness-first prototype.
++                            synchronized (parseLock)
++                                m.parse();
++                        }
++                        else
 +                            m.parse();
 +                    }
 +                }
@@ -71,13 +407,20 @@ index dbbde28..f67a7dc 100644
 +    foreach (w; workers)
 +        w.join();
 +
++    if (parserDiagnosticsEnabled())
++        fprintf(stderr, "parse-parallel-diag summary mode=%s queue_ms=0 parse_ms=0 commit_ms=0 total_ms=0 requested=%d used=%d modules=%llu\n",
++            (useNarrow ? "narrow" : "coarse").ptr,
++            threads,
++            threads,
++            cast(ulong) modules.length);
++
 +    return true;
 +}
 +
  /**
   * DMD's real entry point
   *
-@@ -490,18 +551,43 @@ private int tryMain(const(char)[][] argv, out Param params)
+@@ -490,18 +578,43 @@ private int tryMain(const(char)[][] argv, out Param params)
      timeTraceBeginEvent(TimeTraceEventType.parseGeneral);
      scope (exit) timeTraceEndEvent(TimeTraceEventType.parseGeneral);
      size_t filecount = modules.length;

@@ -1,0 +1,10 @@
+{
+  "name": "dub-pgo-workspace",
+  "description": "Local multi-package workspace used to benchmark dub baseline vs PGO builds.",
+  "targetType": "executable",
+  "sourcePaths": ["source"],
+  "dependencies": {
+    "alpha": { "path": "packages/alpha" },
+    "delta": { "path": "packages/delta" }
+  }
+}

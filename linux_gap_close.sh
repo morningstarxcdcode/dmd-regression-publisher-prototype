@@ -9,10 +9,14 @@ PROFILE_DMD_BIN="${PROFILE_DMD_BIN:-$DMD_BIN}"
 PARSER_DMD_BIN="${PARSER_DMD_BIN:-$DMD_BIN}"
 LDC2_BIN="${LDC2_BIN:-$SCRIPT_DIR/.locald/ldc-1.42.0/bin/ldc2}"
 CLANG_BIN="${CLANG_BIN:-clang}"
+PERF_BIN="${PERF_BIN:-}"
 GATE_B_MODE="${GATE_B_MODE:-strict}"
 PARSER_THREADS="${PARSER_THREADS:-1,2,4,8}"
 PARSER_REPEATS="${PARSER_REPEATS:-5}"
 PARSER_FILE_COUNT="${PARSER_FILE_COUNT:-96}"
+PARSER_FILE_COUNTS="${PARSER_FILE_COUNTS:-}"
+PARSER_LOCK_MODE="${PARSER_LOCK_MODE:-narrow}"
+PARSER_DIAGNOSTICS="${PARSER_DIAGNOSTICS:-0}"
 
 usage() {
     cat <<EOF
@@ -31,10 +35,14 @@ Options:
   --parser-dmd-bin <path>  DMD binary for parser_incompiler_parallel
   --ldc2-bin <path>        LDC2 binary path
   --clang-bin <path>       Clang binary path
+  --perf-bin <path>        perf binary path (or PERF_BIN env)
   --gate-b-mode <mode>     Gate-B policy: strict or hosted_skip (default: strict)
   --parser-threads <csv>   Parser in-compiler thread counts (default: 1,2,4,8)
   --parser-repeats <n>     Parser repeats per thread count (default: 5)
   --parser-file-count <n>  Parser generated file count (default: 96)
+  --parser-file-counts <c> Parser generated file-count corpus sizes
+  --parser-lock-mode <m>   Parser lock mode: coarse or narrow (default: narrow)
+  --parser-diagnostics     Enable parser diagnostics
   --help                   Show this help
 EOF
 }
@@ -57,10 +65,14 @@ while [[ $# -gt 0 ]]; do
         --parser-dmd-bin) PARSER_DMD_BIN="$2"; shift 2 ;;
         --ldc2-bin) LDC2_BIN="$2"; shift 2 ;;
         --clang-bin) CLANG_BIN="$2"; shift 2 ;;
+        --perf-bin) PERF_BIN="$2"; shift 2 ;;
         --gate-b-mode) GATE_B_MODE="$2"; shift 2 ;;
         --parser-threads) PARSER_THREADS="$2"; shift 2 ;;
         --parser-repeats) PARSER_REPEATS="$2"; shift 2 ;;
         --parser-file-count) PARSER_FILE_COUNT="$2"; shift 2 ;;
+        --parser-file-counts) PARSER_FILE_COUNTS="$2"; shift 2 ;;
+        --parser-lock-mode) PARSER_LOCK_MODE="$2"; shift 2 ;;
+        --parser-diagnostics) PARSER_DIAGNOSTICS=1; shift ;;
         --help) usage; exit 0 ;;
         *)
             echo "Unknown argument: $1" >&2
@@ -95,6 +107,11 @@ if [[ "$GATE_B_MODE" != "strict" && "$GATE_B_MODE" != "hosted_skip" ]]; then
     exit 2
 fi
 
+if [[ -n "$PERF_BIN" && ! -x "$PERF_BIN" ]]; then
+    echo "perf binary not executable: $PERF_BIN" >&2
+    exit 2
+fi
+
 mkdir -p "$ARTIFACT_ROOT"
 
 if ! command -v perf >/dev/null 2>&1; then
@@ -118,24 +135,50 @@ log "Step 2/4: Analyze release sweep"
     --out-dir "$RELEASE_DIR"
 
 log "Step 3/4: Linux not_done subset (dmd profile + in-compiler parser threading)"
-"$PYTHON_BIN" "$SCRIPT_DIR/not_done_experiments.py" \
-    --out-dir "$NOT_DONE_DIR/profile" \
-    --tasks dmd_profile_compare \
-    --dmd "$PROFILE_DMD_BIN" \
-    --ldc2 "$LDC2_BIN" \
-    --clang "$CLANG_BIN" \
+PROFILE_PERF_ARGS=()
+if [[ -n "$PERF_BIN" ]]; then
+    PROFILE_PERF_ARGS+=(--perf-bin "$PERF_BIN")
+fi
+PROFILE_CMD=(
+    "$PYTHON_BIN" "$SCRIPT_DIR/not_done_experiments.py"
+    --out-dir "$NOT_DONE_DIR/profile"
+    --tasks dmd_profile_compare
+    --dmd "$PROFILE_DMD_BIN"
+    --ldc2 "$LDC2_BIN"
+    --clang "$CLANG_BIN"
     --task-timeout 900
+)
+if (( ${#PROFILE_PERF_ARGS[@]} )); then
+    PROFILE_CMD+=("${PROFILE_PERF_ARGS[@]}")
+fi
+"${PROFILE_CMD[@]}"
 
-"$PYTHON_BIN" "$SCRIPT_DIR/not_done_experiments.py" \
-    --out-dir "$NOT_DONE_DIR/parser" \
-    --tasks parser_incompiler_parallel \
-    --dmd "$PARSER_DMD_BIN" \
-    --ldc2 "$LDC2_BIN" \
-    --clang "$CLANG_BIN" \
-    --parser-threads "$PARSER_THREADS" \
-    --parser-repeats "$PARSER_REPEATS" \
-    --parser-file-count "$PARSER_FILE_COUNT" \
+PARSER_COUNT_ARGS=(--parser-file-count "$PARSER_FILE_COUNT")
+if [[ -n "$PARSER_FILE_COUNTS" ]]; then
+    PARSER_COUNT_ARGS=(--parser-file-counts "$PARSER_FILE_COUNTS")
+fi
+PARSER_DIAG_ARGS=()
+if [[ "$PARSER_DIAGNOSTICS" == "1" ]]; then
+    PARSER_DIAG_ARGS+=(--parser-diagnostics)
+fi
+
+PARSER_CMD=(
+    "$PYTHON_BIN" "$SCRIPT_DIR/not_done_experiments.py"
+    --out-dir "$NOT_DONE_DIR/parser"
+    --tasks parser_incompiler_parallel
+    --dmd "$PARSER_DMD_BIN"
+    --ldc2 "$LDC2_BIN"
+    --clang "$CLANG_BIN"
+    --parser-lock-mode "$PARSER_LOCK_MODE"
+    --parser-threads "$PARSER_THREADS"
+    --parser-repeats "$PARSER_REPEATS"
     --task-timeout 900
+)
+PARSER_CMD+=("${PARSER_COUNT_ARGS[@]}")
+if (( ${#PARSER_DIAG_ARGS[@]} )); then
+    PARSER_CMD+=("${PARSER_DIAG_ARGS[@]}")
+fi
+"${PARSER_CMD[@]}"
 
 "$PYTHON_BIN" - "$NOT_DONE_DIR/profile/status.csv" "$NOT_DONE_DIR/parser/status.csv" "$NOT_DONE_DIR/status.csv" "$NOT_DONE_DIR/status.md" <<'PY'
 import csv
@@ -208,7 +251,7 @@ def count_ok_fail(path: Path):
 latest_ok, latest_fail = count_ok_fail(latest_csv)
 compat_ok, compat_fail = count_ok_fail(compat_csv)
 
-profile_status = parser_incompiler_status = "missing"
+profile_status = parser_incompiler_status = parser_performance_status = "missing"
 profile_outcome = "missing"
 profile_reason = ""
 if status_csv.exists():
@@ -220,6 +263,7 @@ if status_csv.exists():
             profile_reason = row.get("profiler_reason", "") or row.get("reason", "")
         if key == "parser_incompiler_parallel":
             parser_incompiler_status = row.get("status", "unknown")
+            parser_performance_status = row.get("performance_status", "") or "unknown"
 
 parser_threads_total = 0
 parser_threads_with_success = 0
@@ -228,6 +272,7 @@ if parser_speedup_csv.exists():
     for row in csv.DictReader(parser_speedup_csv.open("r", encoding="utf-8")):
         parser_threads_total += 1
         thr = row.get("threads", "?")
+        files = row.get("files", "?")
         try:
             successful = int((row.get("successful_runs", "") or "0").strip() or "0")
         except ValueError:
@@ -235,7 +280,7 @@ if parser_speedup_csv.exists():
         if successful > 0:
             parser_threads_with_success += 1
         else:
-            parser_threads_missing_success.append(thr)
+            parser_threads_missing_success.append(f"{files}x{thr}")
 
 parser_thread_coverage_ok = parser_threads_total > 0 and parser_threads_with_success == parser_threads_total
 
@@ -257,14 +302,16 @@ lines = [
     f"- dmd_profile_compare task status: {profile_status}",
     f"- dmd_profile_compare profiler outcome: {profile_outcome}",
     f"- parser_incompiler_parallel task status: {parser_incompiler_status}",
+    f"- parser_incompiler_parallel performance status: {parser_performance_status}",
     "",
     "## Closure gates",
     "",
     f"- Gate A (latest20 has successful Linux runs): {'PASS' if latest_ok > 0 else 'FAIL'}",
     f"- Gate B (dmd_profile_compare on Linux perf): {gate_b_result}",
     f"- Gate B reason: {gate_b_reason}",
-    f"- Gate C (parser_incompiler_parallel executed): {'PASS' if parser_incompiler_status == 'done' else 'FAIL'}",
+    f"- Gate C (parser_incompiler_parallel executed cleanly): {'PASS' if parser_incompiler_status in {'done', 'partial'} else 'FAIL'}",
     f"- Gate D (parser thread coverage: each configured thread has successful runs): {'PASS' if parser_thread_coverage_ok else 'FAIL'}",
+    f"- Gate E (parser speedup target met, advisory): {'PASS' if parser_performance_status == 'done' else 'FAIL'}",
     f"- Parser threads missing success: {','.join(parser_threads_missing_success) if parser_threads_missing_success else '-'}",
     "",
     "## Key output paths",
@@ -279,7 +326,7 @@ print(summary_file)
 if (
     latest_ok <= 0
     or gate_b_result == "FAIL"
-    or parser_incompiler_status != "done"
+    or parser_incompiler_status not in {"done", "partial"}
     or not parser_thread_coverage_ok
 ):
     raise SystemExit(3)

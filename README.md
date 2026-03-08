@@ -64,6 +64,12 @@ curl -fsSL https://dlang.org/install.sh | bash -s -- -p ./.locald install dmd-ni
 # 7) Run additional "Not Done" gist items that are feasible here
 ./.venv/bin/python ./not_done_experiments.py --out-dir artifacts/not_done
 
+# 8) Run broader-gist runtime-library kernels
+make runtime-libs
+
+# 9) Run dub PGO benchmark (will report blocked_external if GitHub is unreachable)
+make dub-pgo
+
 # Optional: try automatic Perfetto screenshot capture from artifacts/trace.json
 ./.venv/bin/python ./not_done_experiments.py --out-dir artifacts/not_done --attempt-perfetto-screenshot
 
@@ -71,7 +77,7 @@ curl -fsSL https://dlang.org/install.sh | bash -s -- -p ./.locald install dmd-ni
 ./build_parser_threaded_dmd.sh --host-dmd ./.locald/dmd-nightly/osx/bin/dmd
 
 # Optional: compare baseline vs threaded parser behavior (real in-compiler path)
-./parser_threading_compare.sh --python-bin ./.venv/bin/python --baseline-dmd ./external/dmd/generated/osx/release/64/dmd --threaded-dmd ./external/dmd/generated/osx/debug/64/dmd
+./parser_threading_compare.sh --python-bin ./.venv/bin/python --baseline-dmd ./.locald/dmd-nightly/osx/bin/dmd --threaded-dmd ./external/dmd/generated/osx/debug/64/dmd --file-counts 64,128,256
 
 # Optional (Linux only): strict local/self-hosted gap close with real Gate-B perf requirement
 ./linux_gap_close.sh --python-bin ./.venv/bin/python --gate-b-mode strict --dmd-bin /path/to/dmd
@@ -84,6 +90,7 @@ curl -fsSL https://dlang.org/install.sh | bash -s -- -p ./.locald install dmd-ni
 - Regression trigger is intentionally conservative: percentage jump + non-overlapping bootstrap CIs.
 - The local `external/dmd` checkout is not part of the Git repo snapshot; the parser-prototype frontend change is preserved in `patches/external_dmd_parser_parallel_prototype.patch`.
 - GitHub-hosted Linux validation treats missing kernel-matched `perf` as a documented `SKIP` for Gate B; strict Linux perf closure lives in `.github/workflows/linux-gap-close-strict.yml`.
+- The parser prototype now has `coarse` and `narrow` lock modes. `narrow` is the real split parse/commit path, but current evidence still shows it as performance-partial on this host.
 
 ## Extra Not-Done Artifacts
 
@@ -95,6 +102,10 @@ Running `not_done_experiments.py` writes:
 - `artifacts/not_done/c_vs_d_assembly/*`: `clang` vs `ldc2` assembly comparison for equivalent function.
 - `artifacts/not_done/large_char_array_4gb/*`: `char[]` larger-than-4GB truncation probe.
 - `artifacts/not_done/compiler_fuzz/*`: random mutation fuzz run over `dmd/compiler/test` seeds.
+- `artifacts/not_done/gc_kernels/*`: GC small/mixed/large allocation kernels.
+- `artifacts/not_done/aa_kernels/*`: associative-array insert/lookup/iterate/delete kernels.
+- `artifacts/not_done/float_to_string_kernels/*`: float-to-string datasets (normal/scientific/special).
+- `artifacts/not_done/dub_pgo/*`: `dub` baseline vs PGO build/run comparison (or a structured external blocker).
 - `artifacts/not_done/status.md`: checklist-style done/blocked summary.
 
 ## Mentor Feedback Hooks (Specific Questions)

@@ -64,6 +64,7 @@ jobs:
           fi
 
           command -v perf || true
+          echo "PERF_BIN=$(command -v perf || true)" >> "$GITHUB_ENV"
           if command -v perf >/dev/null 2>&1; then
             ls -l "$(command -v perf)" || true
             perf --version || true
@@ -108,6 +109,7 @@ jobs:
           ./linux_gap_close.sh \
             --python-bin ./.venv/bin/python \
             --gate-b-mode hosted_skip \
+            --perf-bin "${PERF_BIN:-}" \
             --profile-dmd-bin ./.locald/dmd-nightly/linux/bin64/dmd \
             --parser-dmd-bin "$THREADED_DMD"
 
@@ -127,7 +129,8 @@ jobs:
             --threaded-dmd "$THREADED_DMD" \
             --threads 1,2,4 \
             --repeats 3 \
-            --file-count 64 \
+            --file-counts 64,128 \
+            --threaded-lock-mode narrow \
             --out-dir artifacts/linux_gap_close/parser_thread_compare_linux
 
       - name: Upload Linux gap-close artifacts

@@ -1,0 +1,8 @@
+{
+  "name": "delta",
+  "targetType": "library",
+  "sourcePaths": ["source"],
+  "dependencies": {
+    "gamma": { "path": "../gamma" }
+  }
+}

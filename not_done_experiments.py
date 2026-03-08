@@ -9,6 +9,7 @@ import argparse
 import csv
 import difflib
 import json
+import math
 import os
 import platform
 import random
@@ -50,6 +51,10 @@ TASK_ORDER = [
     "perfetto",
     "zero_cost",
     "phobos_sections",
+    "gc_kernels",
+    "aa_kernels",
+    "float_to_string_kernels",
+    "dub_pgo",
     "non_zero_init_structs",
     "linker_strip",
     "ast_field_order",
@@ -67,6 +72,9 @@ PHASE_TASKS = {
         "perfetto",
         "zero_cost",
         "phobos_sections",
+        "gc_kernels",
+        "aa_kernels",
+        "float_to_string_kernels",
         "linker_strip",
         "c_vs_d_asm",
         "compiler_fuzz",
@@ -81,6 +89,17 @@ PHASE_TASKS = {
         "ast_field_order",
         "parser_parallel",
         "parser_incompiler_parallel",
+    ],
+    "runtime_libs": [
+        "gc_kernels",
+        "aa_kernels",
+        "float_to_string_kernels",
+    ],
+    "broader_gist": [
+        "gc_kernels",
+        "aa_kernels",
+        "float_to_string_kernels",
+        "dub_pgo",
     ],
 }
 
@@ -151,6 +170,47 @@ def write_csv_dynamic(path: Path, rows: list[dict[str, object]]) -> None:
 def write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def format_float(value: float | None, digits: int = 3) -> str:
+    if value is None or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        return ""
+    return f"{float(value):.{digits}f}"
+
+
+def compile_d_source(
+    compiler: str,
+    source: Path,
+    exe: Path,
+    *,
+    extra_flags: list[str] | None = None,
+    timeout_sec: float = 240.0,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    cmd = [compiler, str(source), f"-of={exe}"]
+    if extra_flags:
+        cmd.extend(extra_flags)
+    return run_cmd(cmd, cwd=cwd, check=False, timeout=timeout_sec, env=env)
+
+
+def emit_markdown_table(headers: list[str], rows: list[list[object]]) -> list[str]:
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "|" + "|".join("---" for _ in headers) + "|",
+    ]
+    for row in rows:
+        lines.append("| " + " | ".join(str(cell) for cell in row) + " |")
+    return lines
+
+
+def remove_tree(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def parse_objdump_symbols(disasm_text: str) -> tuple[list[tuple[int, str]], dict[str, int]]:
@@ -350,6 +410,698 @@ def run_zero_cost_experiment(
         range_symbol=range_symbol,
         proc_inst_count=inst_count.get(proc_symbol, 0),
         range_inst_count=inst_count.get(range_symbol, 0),
+    )
+
+
+def run_gc_kernel_experiment(
+    out_dir: Path,
+    ldc2: str,
+    runs: int,
+    warmups: int,
+    timeout_sec: float,
+) -> dict[str, object]:
+    task_dir = out_dir / "gc_kernels"
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    source = task_dir / "gc_kernels.d"
+    exe = task_dir / "gc_kernels"
+    source.write_text(
+        textwrap.dedent(
+            """
+            module gc_kernels;
+
+            import core.memory : GC;
+            import core.time : MonoTime;
+            import std.conv : to;
+            import std.stdio : stderr, writeln;
+
+            int main(string[] args)
+            {
+                if (args.length != 2)
+                {
+                    stderr.writeln("usage: gc_kernels <small|mixed|large>");
+                    return 2;
+                }
+
+                string mode = args[1];
+                size_t sink = 0;
+                size_t allocations = 0;
+
+                switch (mode)
+                {
+                    case "small":
+                        auto keep = new ubyte[][](256);
+                        foreach (i; 0 .. 220_000)
+                        {
+                            auto buf = new ubyte[](64 + (i & 15));
+                            buf[0] = cast(ubyte) i;
+                            buf[$ - 1] = cast(ubyte) (i >> 1);
+                            keep[i % keep.length] = buf;
+                            sink += buf[0] + buf[$ - 1];
+                            allocations++;
+                        }
+                        break;
+
+                    case "mixed":
+                        auto keep = new ubyte[][](512);
+                        foreach (i; 0 .. 160_000)
+                        {
+                            auto buf = new ubyte[](32 + (i % 96));
+                            buf[0] = cast(ubyte) (i * 13);
+                            sink ^= buf[0];
+                            keep[i % keep.length] = buf;
+                            if ((i & 255) == 0)
+                                sink += keep[(i / 2) % keep.length].length;
+                            allocations++;
+                        }
+                        break;
+
+                    case "large":
+                        auto keep = new ubyte[][](96);
+                        foreach (i; 0 .. 6_000)
+                        {
+                            auto buf = new ubyte[](64 * 1024 + (i % 8) * 4096);
+                            buf[0] = cast(ubyte) i;
+                            keep[i % keep.length] = buf;
+                            sink += keep[i % keep.length][0];
+                            allocations++;
+                        }
+                        break;
+
+                    default:
+                        stderr.writeln("invalid mode: ", mode);
+                        return 3;
+                }
+
+                auto collectStart = MonoTime.currTime;
+                GC.collect();
+                auto collectNs = (MonoTime.currTime - collectStart).total!"nsecs";
+                writeln(mode, ",", allocations, ",", collectNs, ",", sink);
+                return 0;
+            }
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    compile_cp = compile_d_source(
+        ldc2,
+        source,
+        exe,
+        extra_flags=["-O3", "-release", "-boundscheck=off"],
+        timeout_sec=timeout_sec,
+    )
+    (task_dir / "compile_stdout.txt").write_text(compile_cp.stdout, encoding="utf-8")
+    (task_dir / "compile_stderr.txt").write_text(compile_cp.stderr, encoding="utf-8")
+    if compile_cp.returncode != 0:
+        return task_result(
+            "benchmark D GC kernels",
+            "blocked",
+            reason="failed to compile gc benchmark",
+            stderr_tail=compile_cp.stderr.strip().splitlines()[-1] if compile_cp.stderr.strip() else "",
+        )
+
+    rows: list[dict[str, object]] = []
+    summary_rows: list[dict[str, object]] = []
+    modes = ["small", "mixed", "large"]
+    for mode in modes:
+        for _ in range(warmups):
+            run_cmd([str(exe), mode], check=True, timeout=timeout_sec)
+
+        wall_samples: list[float] = []
+        collect_samples_ms: list[float] = []
+        alloc_samples: list[int] = []
+        for run_idx in range(1, runs + 1):
+            t0 = time.perf_counter_ns()
+            cp = run_cmd([str(exe), mode], check=True, timeout=timeout_sec)
+            wall_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+            parts = cp.stdout.strip().split(",")
+            if len(parts) != 4:
+                raise RuntimeError(f"unexpected gc benchmark output: {cp.stdout!r}")
+            _, allocations_text, collect_ns_text, sink_text = parts
+            allocations = int(allocations_text)
+            collect_ms = int(collect_ns_text) / 1_000_000.0
+            alloc_samples.append(allocations)
+            collect_samples_ms.append(collect_ms)
+            wall_samples.append(wall_ms)
+            rows.append(
+                {
+                    "mode": mode,
+                    "run_idx": run_idx,
+                    "allocations": allocations,
+                    "collect_ms": f"{collect_ms:.3f}",
+                    "wall_ms": f"{wall_ms:.3f}",
+                    "sink": sink_text,
+                }
+            )
+
+        summary_rows.append(
+            {
+                "mode": mode,
+                "runs": runs,
+                "median_wall_ms": format_float(statistics.median(wall_samples)),
+                "mad_wall_ms": format_float(median_abs_deviation(wall_samples)),
+                "median_collect_ms": format_float(statistics.median(collect_samples_ms)),
+                "median_allocations": int(statistics.median(alloc_samples)),
+            }
+        )
+
+    write_csv(
+        task_dir / "results.csv",
+        ["mode", "run_idx", "allocations", "collect_ms", "wall_ms", "sink"],
+        rows,
+    )
+    write_csv(
+        task_dir / "summary.csv",
+        ["mode", "runs", "median_wall_ms", "mad_wall_ms", "median_collect_ms", "median_allocations"],
+        summary_rows,
+    )
+
+    report_rows = [
+        [
+            row["mode"],
+            row["median_allocations"],
+            row["median_collect_ms"],
+            row["median_wall_ms"],
+        ]
+        for row in summary_rows
+    ]
+    report_lines = [
+        "# D runtime GC kernels",
+        "",
+        "Compiler flags: `-O3 -release -boundscheck=off`",
+        "",
+        "Kernels:",
+        "- `small`: short-lived small allocations",
+        "- `mixed`: mixed churn with a persistent live set",
+        "- `large`: larger array churn to stress collection cost",
+        "",
+        *emit_markdown_table(
+            ["Mode", "Median allocations", "Median collect ms", "Median wall ms"],
+            report_rows,
+        ),
+    ]
+    (task_dir / "report.md").write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+
+    return task_result(
+        "benchmark D GC kernels",
+        "done",
+        modes=",".join(modes),
+        runs=runs,
+        fastest_mode=min(summary_rows, key=lambda row: float(row["median_wall_ms"]))["mode"],
+    )
+
+
+def run_aa_kernel_experiment(
+    out_dir: Path,
+    ldc2: str,
+    runs: int,
+    warmups: int,
+    timeout_sec: float,
+) -> dict[str, object]:
+    task_dir = out_dir / "aa_kernels"
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    source = task_dir / "aa_kernels.d"
+    exe = task_dir / "aa_kernels"
+    source.write_text(
+        textwrap.dedent(
+            """
+            module aa_kernels;
+
+            import std.conv : to;
+            import std.format : format;
+            import std.stdio : stderr, writeln;
+
+            string makeKey(size_t i)
+            {
+                return format!"key_%08x"(cast(uint) (i * 2_654_435_761U));
+            }
+
+            int main(string[] args)
+            {
+                if (args.length != 4)
+                {
+                    stderr.writeln("usage: aa_kernels <int|string> <insert|hit_lookup|miss_lookup|iterate|delete_reinsert> <scale>");
+                    return 2;
+                }
+
+                string keyType = args[1];
+                string workload = args[2];
+                size_t scale = args[3].to!size_t;
+                ulong sink = 0;
+                size_t ops = 0;
+
+                if (keyType == "int")
+                {
+                    int[int] table;
+                    foreach (i; 0 .. scale)
+                        table[cast(int) i] = cast(int) (i * 7 + 3);
+
+                    switch (workload)
+                    {
+                        case "insert":
+                            table = int[int].init;
+                            foreach (i; 0 .. scale)
+                            {
+                                table[cast(int) i] = cast(int) (i * 7 + 3);
+                                sink += table[cast(int) i];
+                                ops++;
+                            }
+                            break;
+
+                        case "hit_lookup":
+                            foreach (_; 0 .. 5)
+                            foreach (i; 0 .. scale)
+                            {
+                                sink += cast(uint) table[cast(int) i];
+                                ops++;
+                            }
+                            break;
+
+                        case "miss_lookup":
+                            foreach (_; 0 .. 5)
+                            foreach (i; 0 .. scale)
+                            {
+                                sink += (cast(int) (i + scale) in table) is null ? 1 : 0;
+                                ops++;
+                            }
+                            break;
+
+                        case "iterate":
+                            foreach (_; 0 .. 4)
+                            foreach (k, v; table)
+                            {
+                                sink += cast(uint) (k ^ v);
+                                ops++;
+                            }
+                            break;
+
+                        case "delete_reinsert":
+                            foreach (i; 0 .. scale)
+                            {
+                                table.remove(cast(int) i);
+                                ops++;
+                            }
+                            foreach (i; 0 .. scale)
+                            {
+                                table[cast(int) i] = cast(int) (i * 11 + 5);
+                                sink += cast(uint) table[cast(int) i];
+                                ops++;
+                            }
+                            break;
+
+                        default:
+                            stderr.writeln("invalid workload: ", workload);
+                            return 3;
+                    }
+                }
+                else if (keyType == "string")
+                {
+                    string[string] table;
+                    auto keys = new string[](scale);
+                    foreach (i; 0 .. scale)
+                    {
+                        keys[i] = makeKey(i);
+                        table[keys[i]] = keys[i];
+                    }
+
+                    switch (workload)
+                    {
+                        case "insert":
+                            table = string[string].init;
+                            foreach (i; 0 .. scale)
+                            {
+                                auto key = makeKey(i);
+                                table[key] = key;
+                                sink += table[key].length;
+                                ops++;
+                            }
+                            break;
+
+                        case "hit_lookup":
+                            foreach (_; 0 .. 5)
+                            foreach (key; keys)
+                            {
+                                sink += table[key].length;
+                                ops++;
+                            }
+                            break;
+
+                        case "miss_lookup":
+                            foreach (_; 0 .. 5)
+                            foreach (i; 0 .. scale)
+                            {
+                                auto key = makeKey(i + scale);
+                                sink += (key in table) is null ? 1 : 0;
+                                ops++;
+                            }
+                            break;
+
+                        case "iterate":
+                            foreach (_; 0 .. 4)
+                            foreach (k, v; table)
+                            {
+                                sink += k.length + v.length;
+                                ops++;
+                            }
+                            break;
+
+                        case "delete_reinsert":
+                            foreach (key; keys)
+                            {
+                                table.remove(key);
+                                ops++;
+                            }
+                            foreach (key; keys)
+                            {
+                                table[key] = key;
+                                sink += table[key].length;
+                                ops++;
+                            }
+                            break;
+
+                        default:
+                            stderr.writeln("invalid workload: ", workload);
+                            return 3;
+                    }
+                }
+                else
+                {
+                    stderr.writeln("invalid keyType: ", keyType);
+                    return 4;
+                }
+
+                writeln(keyType, ",", workload, ",", scale, ",", ops, ",", sink);
+                return 0;
+            }
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    compile_cp = compile_d_source(
+        ldc2,
+        source,
+        exe,
+        extra_flags=["-O3", "-release", "-boundscheck=off"],
+        timeout_sec=timeout_sec,
+    )
+    (task_dir / "compile_stdout.txt").write_text(compile_cp.stdout, encoding="utf-8")
+    (task_dir / "compile_stderr.txt").write_text(compile_cp.stderr, encoding="utf-8")
+    if compile_cp.returncode != 0:
+        return task_result(
+            "benchmark D associative arrays",
+            "blocked",
+            reason="failed to compile aa benchmark",
+            stderr_tail=compile_cp.stderr.strip().splitlines()[-1] if compile_cp.stderr.strip() else "",
+        )
+
+    raw_rows: list[dict[str, object]] = []
+    summary_rows: list[dict[str, object]] = []
+    key_types = ["int", "string"]
+    workloads = ["insert", "hit_lookup", "miss_lookup", "iterate", "delete_reinsert"]
+    scales = [1_000, 10_000, 100_000]
+
+    for key_type in key_types:
+        for workload in workloads:
+            for scale in scales:
+                for _ in range(warmups):
+                    run_cmd([str(exe), key_type, workload, str(scale)], check=True, timeout=timeout_sec)
+
+                wall_samples: list[float] = []
+                ns_per_op_samples: list[float] = []
+                ops_samples: list[int] = []
+                for run_idx in range(1, runs + 1):
+                    t0 = time.perf_counter_ns()
+                    cp = run_cmd([str(exe), key_type, workload, str(scale)], check=True, timeout=timeout_sec)
+                    wall_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+                    parts = cp.stdout.strip().split(",")
+                    if len(parts) != 5:
+                        raise RuntimeError(f"unexpected aa benchmark output: {cp.stdout!r}")
+                    _, _, _, ops_text, sink_text = parts
+                    ops = int(ops_text)
+                    ns_per_op = (wall_ms * 1_000_000.0 / ops) if ops > 0 else float("nan")
+                    wall_samples.append(wall_ms)
+                    ns_per_op_samples.append(ns_per_op)
+                    ops_samples.append(ops)
+                    raw_rows.append(
+                        {
+                            "key_type": key_type,
+                            "workload": workload,
+                            "scale": scale,
+                            "run_idx": run_idx,
+                            "ops": ops,
+                            "wall_ms": format_float(wall_ms),
+                            "ns_per_op": format_float(ns_per_op),
+                            "sink": sink_text,
+                        }
+                    )
+
+                summary_rows.append(
+                    {
+                        "key_type": key_type,
+                        "workload": workload,
+                        "scale": scale,
+                        "runs": runs,
+                        "median_ops": int(statistics.median(ops_samples)),
+                        "median_wall_ms": format_float(statistics.median(wall_samples)),
+                        "median_ns_per_op": format_float(statistics.median(ns_per_op_samples)),
+                    }
+                )
+
+    write_csv(
+        task_dir / "results.csv",
+        ["key_type", "workload", "scale", "run_idx", "ops", "wall_ms", "ns_per_op", "sink"],
+        raw_rows,
+    )
+    write_csv(
+        task_dir / "summary.csv",
+        ["key_type", "workload", "scale", "runs", "median_ops", "median_wall_ms", "median_ns_per_op"],
+        summary_rows,
+    )
+
+    report_lines = [
+        "# D associative-array kernels",
+        "",
+        "Compiler flags: `-O3 -release -boundscheck=off`",
+        "",
+    ]
+    best_rows = [row for row in summary_rows if row["scale"] == 100_000]
+    report_lines.extend(
+        emit_markdown_table(
+            ["Key type", "Workload", "Scale", "Median ns/op", "Median wall ms"],
+            [
+                [row["key_type"], row["workload"], row["scale"], row["median_ns_per_op"], row["median_wall_ms"]]
+                for row in best_rows
+            ],
+        )
+    )
+    (task_dir / "report.md").write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+
+    return task_result(
+        "benchmark D associative arrays",
+        "done",
+        key_types=",".join(key_types),
+        workloads=",".join(workloads),
+        scales=",".join(str(scale) for scale in scales),
+    )
+
+
+def run_float_to_string_experiment(
+    out_dir: Path,
+    ldc2: str,
+    runs: int,
+    warmups: int,
+    timeout_sec: float,
+) -> dict[str, object]:
+    task_dir = out_dir / "float_to_string_kernels"
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    source = task_dir / "float_to_string_kernels.d"
+    exe = task_dir / "float_to_string_kernels"
+    source.write_text(
+        textwrap.dedent(
+            """
+            module float_to_string_kernels;
+
+            import std.array : appender;
+            import std.conv : to;
+            import std.math : cos, sin;
+            import std.stdio : stderr, writeln;
+
+            double[] buildDataset(string dataset)
+            {
+                auto result = appender!(double[])();
+                switch (dataset)
+                {
+                    case "normal":
+                        foreach (i; 0 .. 4096)
+                            result.put(cast(double) i * 0.25 + sin(cast(double) i / 31.0));
+                        break;
+
+                    case "scientific":
+                        foreach (i; 0 .. 4096)
+                        {
+                            auto mag = cast(double) ((i % 40) - 20);
+                            result.put((sin(cast(double) i / 9.0) + 1.5) * 10.0 ^^ mag);
+                        }
+                        break;
+
+                    case "special":
+                        double[] base = [
+                            0.0,
+                            -0.0,
+                            double.min_normal / 2.0,
+                            double.min_normal,
+                            double.max / 2.0,
+                            double.infinity,
+                            -double.infinity,
+                            double.nan,
+                            sin(1.0),
+                            cos(1.0),
+                        ];
+                        foreach (_; 0 .. 512)
+                            foreach (v; base)
+                                result.put(v);
+                        break;
+
+                    default:
+                        assert(0, "unknown dataset");
+                }
+                return result.data;
+            }
+
+            int main(string[] args)
+            {
+                if (args.length != 3)
+                {
+                    stderr.writeln("usage: float_to_string_kernels <normal|scientific|special> <outer_loops>");
+                    return 2;
+                }
+
+                string dataset = args[1];
+                size_t outerLoops = args[2].to!size_t;
+                auto values = buildDataset(dataset);
+                ulong sink = 0;
+                size_t ops = 0;
+                size_t totalChars = 0;
+
+                foreach (_; 0 .. outerLoops)
+                {
+                    foreach (v; values)
+                    {
+                        auto s = v.to!string;
+                        totalChars += s.length;
+                        sink = (sink * 1_099_511_628_211UL) ^ cast(ulong) s.length;
+                        ops++;
+                    }
+                }
+
+                writeln(dataset, ",", ops, ",", totalChars, ",", sink);
+                return 0;
+            }
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    compile_cp = compile_d_source(
+        ldc2,
+        source,
+        exe,
+        extra_flags=["-O3", "-release", "-boundscheck=off"],
+        timeout_sec=timeout_sec,
+    )
+    (task_dir / "compile_stdout.txt").write_text(compile_cp.stdout, encoding="utf-8")
+    (task_dir / "compile_stderr.txt").write_text(compile_cp.stderr, encoding="utf-8")
+    if compile_cp.returncode != 0:
+        return task_result(
+            "benchmark D float-to-string conversion",
+            "blocked",
+            reason="failed to compile float benchmark",
+            stderr_tail=compile_cp.stderr.strip().splitlines()[-1] if compile_cp.stderr.strip() else "",
+        )
+
+    raw_rows: list[dict[str, object]] = []
+    summary_rows: list[dict[str, object]] = []
+    datasets = {"normal": 128, "scientific": 128, "special": 256}
+
+    for dataset, outer_loops in datasets.items():
+        for _ in range(warmups):
+            run_cmd([str(exe), dataset, str(outer_loops)], check=True, timeout=timeout_sec)
+
+        wall_samples: list[float] = []
+        conversions_per_sec: list[float] = []
+        ops_samples: list[int] = []
+        for run_idx in range(1, runs + 1):
+            t0 = time.perf_counter_ns()
+            cp = run_cmd([str(exe), dataset, str(outer_loops)], check=True, timeout=timeout_sec)
+            wall_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+            parts = cp.stdout.strip().split(",")
+            if len(parts) != 4:
+                raise RuntimeError(f"unexpected float benchmark output: {cp.stdout!r}")
+            _, ops_text, total_chars_text, sink_text = parts
+            ops = int(ops_text)
+            cps = ops / (wall_ms / 1000.0) if wall_ms > 0 else float("nan")
+            wall_samples.append(wall_ms)
+            conversions_per_sec.append(cps)
+            ops_samples.append(ops)
+            raw_rows.append(
+                {
+                    "dataset": dataset,
+                    "run_idx": run_idx,
+                    "ops": ops,
+                    "total_chars": total_chars_text,
+                    "wall_ms": format_float(wall_ms),
+                    "conversions_per_sec": format_float(cps, 1),
+                    "sink": sink_text,
+                }
+            )
+
+        summary_rows.append(
+            {
+                "dataset": dataset,
+                "runs": runs,
+                "median_ops": int(statistics.median(ops_samples)),
+                "median_wall_ms": format_float(statistics.median(wall_samples)),
+                "median_conversions_per_sec": format_float(statistics.median(conversions_per_sec), 1),
+            }
+        )
+
+    write_csv(
+        task_dir / "results.csv",
+        ["dataset", "run_idx", "ops", "total_chars", "wall_ms", "conversions_per_sec", "sink"],
+        raw_rows,
+    )
+    write_csv(
+        task_dir / "summary.csv",
+        ["dataset", "runs", "median_ops", "median_wall_ms", "median_conversions_per_sec"],
+        summary_rows,
+    )
+    report_lines = [
+        "# D float-to-string kernels",
+        "",
+        "Compiler flags: `-O3 -release -boundscheck=off`",
+        "",
+        *emit_markdown_table(
+            ["Dataset", "Median ops", "Median wall ms", "Median conversions/sec"],
+            [
+                [row["dataset"], row["median_ops"], row["median_wall_ms"], row["median_conversions_per_sec"]]
+                for row in summary_rows
+            ],
+        ),
+    ]
+    (task_dir / "report.md").write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+
+    return task_result(
+        "benchmark D float-to-string conversion",
+        "done",
+        datasets=",".join(datasets.keys()),
+        runs=runs,
     )
 
 
@@ -1222,6 +1974,398 @@ def ensure_repo_clone(slug: str, base_dir: Path, timeout_sec: float) -> tuple[Pa
     return local, "cloned"
 
 
+def resolve_git_ref(repo_dir: Path, ref: str, timeout_sec: float) -> tuple[str | None, str]:
+    candidates = [ref]
+    if not ref.startswith("origin/"):
+        candidates.append(f"origin/{ref}")
+    for candidate in candidates:
+        cp = run_cmd(
+            ["git", "-C", str(repo_dir), "rev-parse", "--verify", candidate],
+            check=False,
+            timeout=timeout_sec,
+        )
+        if cp.returncode == 0:
+            return cp.stdout.strip(), ""
+    fetch_cp = run_cmd(
+        ["git", "-C", str(repo_dir), "fetch", "--depth", "1", "origin", ref],
+        check=False,
+        timeout=timeout_sec,
+    )
+    stderr_tail = fetch_cp.stderr.strip().splitlines()[-1] if fetch_cp.stderr.strip() else ""
+    if fetch_cp.returncode == 0:
+        cp = run_cmd(
+            ["git", "-C", str(repo_dir), "rev-parse", "--verify", "FETCH_HEAD"],
+            check=False,
+            timeout=timeout_sec,
+        )
+        if cp.returncode == 0:
+            return cp.stdout.strip(), ""
+    return None, stderr_tail or f"unable to resolve ref {ref}"
+
+
+def prepare_git_worktree(repo_dir: Path, worktree: Path, commit: str, timeout_sec: float) -> tuple[bool, str]:
+    worktree = worktree.resolve()
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    run_cmd(["git", "-C", str(repo_dir), "worktree", "remove", "--force", str(worktree)], check=False, timeout=timeout_sec)
+    remove_tree(worktree)
+    cp = run_cmd(
+        ["git", "-C", str(repo_dir), "worktree", "add", "--force", "--detach", str(worktree), commit],
+        check=False,
+        timeout=timeout_sec,
+    )
+    if cp.returncode != 0:
+        return False, cp.stderr.strip().splitlines()[-1] if cp.stderr.strip() else "worktree add failed"
+    if not worktree.exists():
+        return False, f"worktree add reported success but path is missing: {worktree}"
+    return True, ""
+
+
+def find_named_executable(root: Path, name: str) -> Path | None:
+    candidates: list[Path] = []
+    for path in root.rglob(name):
+        if ".git" in path.parts:
+            continue
+        if path.is_file() and os.access(path, os.X_OK):
+            candidates.append(path)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    return candidates[0]
+
+
+def reset_dub_workspace_outputs(workspace_root: Path) -> None:
+    for rel in (".dub", "bin", ".cache", ".dub-home"):
+        remove_tree(workspace_root / rel)
+
+
+def run_timed_cmd(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    timeout_sec: float,
+    env: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], float]:
+    t0 = time.perf_counter_ns()
+    cp = run_cmd(cmd, cwd=cwd, check=False, timeout=timeout_sec, env=env)
+    wall_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+    return cp, wall_ms
+
+
+def run_dub_pgo_experiment(
+    out_dir: Path,
+    dub_bin: str,
+    ldmd2_bin: str,
+    ldc_profdata_bin: str,
+    runs: int,
+    timeout_sec: float,
+    clone_timeout: float,
+    workspace_root: Path,
+    upstream_ref: str,
+) -> dict[str, object]:
+    task_dir = out_dir / "dub_pgo"
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    if not workspace_root.exists():
+        return task_result(
+            "benchmark dub with PGO",
+            "blocked",
+            reason=f"missing benchmark workspace: {workspace_root}",
+        )
+
+    if not Path(dub_bin).exists():
+        return task_result("benchmark dub with PGO", "blocked", reason=f"dub not found: {dub_bin}")
+    if not Path(ldmd2_bin).exists():
+        return task_result("benchmark dub with PGO", "blocked", reason=f"ldmd2 not found: {ldmd2_bin}")
+    if not Path(ldc_profdata_bin).exists():
+        return task_result("benchmark dub with PGO", "blocked", reason=f"ldc-profdata not found: {ldc_profdata_bin}")
+
+    cache_root = repo_root() / "artifacts" / "cache" / "dub_pgo"
+    cache_root.mkdir(parents=True, exist_ok=True)
+
+    upstream_repo, clone_state = ensure_repo_clone("dlang/dub", cache_root, clone_timeout)
+    if upstream_repo is None:
+        return task_result(
+            "benchmark dub with PGO",
+            "blocked_external",
+            reason=f"failed to clone dlang/dub: {clone_state}",
+        )
+
+    resolved_commit, resolve_err = resolve_git_ref(upstream_repo, upstream_ref, clone_timeout)
+    if resolved_commit is None:
+        return task_result(
+            "benchmark dub with PGO",
+            "blocked_external",
+            reason=f"failed to resolve dub ref {upstream_ref}: {resolve_err}",
+        )
+
+    worktrees_dir = task_dir / "worktrees"
+    worktrees_dir.mkdir(parents=True, exist_ok=True)
+    baseline_tree = (worktrees_dir / "baseline").resolve()
+    instr_tree = (worktrees_dir / "instrumented").resolve()
+    pgo_tree = (worktrees_dir / "pgo").resolve()
+    for tree in (baseline_tree, instr_tree, pgo_tree):
+        ok, err = prepare_git_worktree(upstream_repo, tree, resolved_commit, clone_timeout)
+        if not ok:
+            return task_result(
+                "benchmark dub with PGO",
+                "blocked",
+                reason=f"failed to prepare worktree {tree.name}: {err}",
+            )
+
+    def build_dub_variant(tree: Path, variant: str, dflags: list[str]) -> tuple[Path | None, str]:
+        if not tree.exists():
+            return None, f"missing worktree path: {tree}"
+        env = os.environ.copy()
+        env["PATH"] = f"{Path(ldmd2_bin).parent}:{env.get('PATH', '')}"
+        env["DFLAGS"] = " ".join(dflags)
+        env["DUB_HOME"] = str(task_dir / "builder_home" / variant)
+        remove_tree(Path(env["DUB_HOME"]))
+        cp = run_cmd(
+            [
+                dub_bin,
+                "build",
+                "--root",
+                str(tree),
+                "--compiler",
+                ldmd2_bin,
+                "--build=release",
+                "--force",
+                "--skip-registry=all",
+                "--cache=local",
+            ],
+            cwd=tree,
+            check=False,
+            timeout=timeout_sec,
+            env=env,
+        )
+        (task_dir / f"build_{variant}_stdout.txt").write_text(cp.stdout, encoding="utf-8")
+        (task_dir / f"build_{variant}_stderr.txt").write_text(cp.stderr, encoding="utf-8")
+        if cp.returncode != 0:
+            return None, cp.stderr.strip().splitlines()[-1] if cp.stderr.strip() else "dub build failed"
+        binary = find_named_executable(tree, "dub")
+        if binary is None:
+            return None, "unable to locate built dub binary"
+        return binary, ""
+
+    baseline_binary, build_err = build_dub_variant(
+        baseline_tree,
+        "baseline",
+        ["-O3", "-release", "-boundscheck=off"],
+    )
+    if baseline_binary is None:
+        return task_result("benchmark dub with PGO", "blocked", reason=f"baseline build failed: {build_err}")
+
+    profraw_dir = task_dir / "profiles" / "raw"
+    profraw_dir.mkdir(parents=True, exist_ok=True)
+    instrumented_binary, build_err = build_dub_variant(
+        instr_tree,
+        "instrumented",
+        [
+            "-O3",
+            "-release",
+            "-boundscheck=off",
+            f"-fprofile-instr-generate={profraw_dir / 'dub-%p.profraw'}",
+        ],
+    )
+    if instrumented_binary is None:
+        return task_result("benchmark dub with PGO", "blocked", reason=f"instrumented build failed: {build_err}")
+
+    workload_commands = [
+        ("describe", ["describe"]),
+        ("build", ["build", "--build=release", "--force"]),
+        ("test", ["test", "--build=unittest", "--force"]),
+    ]
+
+    workload_home = task_dir / "workload_home"
+    remove_tree(workload_home)
+    common_env = os.environ.copy()
+    common_env["PATH"] = f"{Path(ldmd2_bin).parent}:{common_env.get('PATH', '')}"
+    common_env["DUB_HOME"] = str(workload_home)
+    common_env["LLVM_PROFILE_FILE"] = str(profraw_dir / "dub-%p.profraw")
+
+    training_rows: list[dict[str, object]] = []
+    for label, args in workload_commands:
+        reset_dub_workspace_outputs(workspace_root)
+        cp, wall_ms = run_timed_cmd(
+            [str(instrumented_binary), *args, "--root", str(workspace_root), "--skip-registry=all", "--compiler", ldmd2_bin],
+            cwd=workspace_root,
+            timeout_sec=timeout_sec,
+            env=common_env,
+        )
+        (task_dir / f"train_{label}_stdout.txt").write_text(cp.stdout, encoding="utf-8")
+        (task_dir / f"train_{label}_stderr.txt").write_text(cp.stderr, encoding="utf-8")
+        training_rows.append(
+            {
+                "command": label,
+                "returncode": cp.returncode,
+                "wall_ms": format_float(wall_ms),
+            }
+        )
+        if cp.returncode != 0:
+            return task_result(
+                "benchmark dub with PGO",
+                "blocked",
+                reason=f"instrumented training failed on {label}",
+                resolved_commit=resolved_commit,
+            )
+
+    profraw_files = sorted(profraw_dir.glob("*.profraw"))
+    if not profraw_files:
+        return task_result(
+            "benchmark dub with PGO",
+            "blocked",
+            reason="instrumented dub run produced no .profraw files",
+            resolved_commit=resolved_commit,
+        )
+
+    profdata_path = task_dir / "profiles" / "dub.profdata"
+    merge_cp = run_cmd(
+        [ldc_profdata_bin, "merge", "-output", str(profdata_path), *(str(path) for path in profraw_files)],
+        check=False,
+        timeout=timeout_sec,
+    )
+    (task_dir / "profdata_merge_stdout.txt").write_text(merge_cp.stdout, encoding="utf-8")
+    (task_dir / "profdata_merge_stderr.txt").write_text(merge_cp.stderr, encoding="utf-8")
+    if merge_cp.returncode != 0 or not profdata_path.exists():
+        return task_result(
+            "benchmark dub with PGO",
+            "blocked",
+            reason="failed to merge LLVM profile data",
+            resolved_commit=resolved_commit,
+        )
+
+    pgo_binary, build_err = build_dub_variant(
+        pgo_tree,
+        "pgo",
+        [
+            "-O3",
+            "-release",
+            "-boundscheck=off",
+            f"-fprofile-instr-use={profdata_path}",
+        ],
+    )
+    if pgo_binary is None:
+        return task_result("benchmark dub with PGO", "blocked", reason=f"PGO build failed: {build_err}")
+
+    rows: list[dict[str, object]] = []
+    summary_rows: list[dict[str, object]] = []
+    variants = [("baseline", baseline_binary), ("pgo", pgo_binary)]
+    for label, args in workload_commands:
+        for variant, binary in variants:
+            samples: list[float] = []
+            for run_idx in range(1, runs + 1):
+                reset_dub_workspace_outputs(workspace_root)
+                cp, wall_ms = run_timed_cmd(
+                    [str(binary), *args, "--root", str(workspace_root), "--skip-registry=all", "--compiler", ldmd2_bin],
+                    cwd=workspace_root,
+                    timeout_sec=timeout_sec,
+                    env=common_env,
+                )
+                rows.append(
+                    {
+                        "variant": variant,
+                        "command": label,
+                        "run_idx": run_idx,
+                        "wall_ms": format_float(wall_ms),
+                        "returncode": cp.returncode,
+                    }
+                )
+                if cp.returncode != 0:
+                    return task_result(
+                        "benchmark dub with PGO",
+                        "failed",
+                        reason=f"{variant} dub failed on {label}",
+                        resolved_commit=resolved_commit,
+                    )
+                samples.append(wall_ms)
+
+            summary_rows.append(
+                {
+                    "variant": variant,
+                    "command": label,
+                    "runs": runs,
+                    "median_wall_ms": format_float(statistics.median(samples)),
+                    "binary_size_bytes": binary.stat().st_size,
+                }
+            )
+
+    write_csv(
+        task_dir / "training.csv",
+        ["command", "returncode", "wall_ms"],
+        training_rows,
+    )
+    write_csv(
+        task_dir / "results.csv",
+        ["variant", "command", "run_idx", "wall_ms", "returncode"],
+        rows,
+    )
+    write_csv(
+        task_dir / "summary.csv",
+        ["variant", "command", "runs", "median_wall_ms", "binary_size_bytes"],
+        summary_rows,
+    )
+
+    comparison_rows: list[dict[str, object]] = []
+    for command in [label for label, _ in workload_commands]:
+        base = next(row for row in summary_rows if row["variant"] == "baseline" and row["command"] == command)
+        pgo = next(row for row in summary_rows if row["variant"] == "pgo" and row["command"] == command)
+        base_ms = float(base["median_wall_ms"])
+        pgo_ms = float(pgo["median_wall_ms"])
+        improvement = ((base_ms - pgo_ms) / base_ms * 100.0) if base_ms > 0 else float("nan")
+        comparison_rows.append(
+            {
+                "command": command,
+                "baseline_median_ms": format_float(base_ms),
+                "pgo_median_ms": format_float(pgo_ms),
+                "improvement_pct": format_float(improvement),
+            }
+        )
+    write_csv(
+        task_dir / "comparison.csv",
+        ["command", "baseline_median_ms", "pgo_median_ms", "improvement_pct"],
+        comparison_rows,
+    )
+
+    report_lines = [
+        "# dub PGO benchmark",
+        "",
+        f"Upstream ref request: `{upstream_ref}`",
+        f"Resolved commit: `{resolved_commit}`",
+        f"Clone state: `{clone_state}`",
+        f"Profile files: `{len(profraw_files)}` raw, merged to `{profdata_path.name}`",
+        "",
+        "## Runtime comparison",
+        "",
+        *emit_markdown_table(
+            ["Command", "Baseline median ms", "PGO median ms", "Improvement %"],
+            [
+                [row["command"], row["baseline_median_ms"], row["pgo_median_ms"], row["improvement_pct"]]
+                for row in comparison_rows
+            ],
+        ),
+        "",
+        "## Binary sizes",
+        "",
+        *emit_markdown_table(
+            ["Variant", "Command", "Binary size bytes"],
+            [
+                [row["variant"], row["command"], row["binary_size_bytes"]]
+                for row in summary_rows
+            ],
+        ),
+    ]
+    (task_dir / "report.md").write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+
+    best_gain = max((float(row["improvement_pct"]) for row in comparison_rows), default=float("nan"))
+    return task_result(
+        "benchmark dub with PGO",
+        "done",
+        resolved_commit=resolved_commit,
+        best_improvement_pct=format_float(best_gain),
+        profile_raw_files=len(profraw_files),
+    )
+
+
 def discover_project_source_roots(project_dir: Path) -> list[Path]:
     candidates = [
         project_dir / "source",
@@ -1584,7 +2728,9 @@ def compile_incompiler_parse_probe(
     timeout_sec: float,
     obj_dir: Path,
     include_paths: list[Path] | None = None,
-) -> tuple[str, float, int, str, str]:
+    lock_mode: str = "coarse",
+    diagnostics: bool = False,
+) -> tuple[str, float, int, str, str, str]:
     obj_dir.mkdir(parents=True, exist_ok=True)
     for obj in obj_dir.glob("*.o"):
         obj.unlink(missing_ok=True)
@@ -1597,133 +2743,169 @@ def compile_incompiler_parse_probe(
     cmd.extend(str(p) for p in files)
     env = os.environ.copy()
     env["DMD_PARSE_THREADS"] = str(parse_threads)
+    env["DMD_PARSE_LOCK_MODE"] = lock_mode
+    env["DMD_PARSE_DIAGNOSTICS"] = "1" if diagnostics else "0"
 
     t0 = time.perf_counter_ns()
     try:
         cp = run_cmd(cmd, check=False, timeout=timeout_sec, env=env)
     except subprocess.TimeoutExpired:
         ms = (time.perf_counter_ns() - t0) / 1_000_000.0
-        return "timeout", ms, 124, "timeout", "timeout"
+        return "timeout", ms, 124, "timeout", "timeout", ""
 
     ms = (time.perf_counter_ns() - t0) / 1_000_000.0
-    err_tail = cp.stderr.strip().splitlines()[-1] if cp.stderr.strip() else ""
-    err_excerpt_lines = cp.stderr.strip().splitlines()[:40] if cp.stderr.strip() else []
+    stderr_lines = cp.stderr.strip().splitlines() if cp.stderr.strip() else []
+    diag_lines = [line for line in stderr_lines if line.startswith("parse-parallel-diag ")]
+    err_lines = [line for line in stderr_lines if not line.startswith("parse-parallel-diag ")]
+    err_tail = err_lines[-1] if err_lines else (diag_lines[-1] if diag_lines else "")
+    err_excerpt_lines = err_lines[:40]
     err_excerpt = "\n".join(err_excerpt_lines)
-    return classify_compile_outcome(cp), ms, cp.returncode, err_tail, err_excerpt
+    return classify_compile_outcome(cp), ms, cp.returncode, err_tail, err_excerpt, "\n".join(diag_lines)
 
 
 def run_incompiler_parser_parallel_experiment(
     out_dir: Path,
     dmd: str,
-    file_count: int,
+    file_counts: list[int],
     thread_values: list[int],
     repeats: int,
     timeout_sec: float,
+    lock_mode: str,
+    diagnostics: bool,
 ) -> dict[str, object]:
     task_dir = out_dir / "parser_incompiler_parallel"
     task_dir.mkdir(parents=True, exist_ok=True)
 
-    files = generate_parser_workload(task_dir, file_count=file_count)
-    obj_dir = task_dir / "obj"
     include_paths = resolve_d_import_paths(dmd)
 
     rows: list[dict[str, object]] = []
-    successful_by_jobs: dict[int, list[float]] = defaultdict(list)
+    successful_by_key: dict[tuple[int, int], list[float]] = defaultdict(list)
     crash_count = 0
-    first_failure_by_thread: dict[int, dict[str, object]] = {}
-    total_by_jobs: Counter[int] = Counter()
+    first_failure_by_key: dict[tuple[int, int], dict[str, object]] = {}
+    diagnostic_rows: list[dict[str, object]] = []
+    file_counts = sorted(set(file_counts))
 
-    for jobs in thread_values:
-        for rep in range(1, repeats + 1):
-            total_by_jobs[jobs] += 1
-            outcome, wall_ms, rc, err_tail, err_excerpt = compile_incompiler_parse_probe(
-                dmd=dmd,
-                files=files,
-                parse_threads=jobs,
-                timeout_sec=timeout_sec,
-                obj_dir=obj_dir,
-                include_paths=include_paths,
-            )
-            if outcome == "ok":
-                successful_by_jobs[jobs].append(wall_ms)
-            elif outcome == "crash":
-                crash_count += 1
-            if outcome != "ok" and jobs not in first_failure_by_thread:
-                first_failure_by_thread[jobs] = {
-                    "repeat": rep,
-                    "outcome": outcome,
-                    "returncode": rc,
-                    "error_tail": err_tail,
-                    "error_excerpt": err_excerpt,
-                }
+    def parse_diag_payload(payload: str, *, file_count: int, threads: int, repeat: int) -> None:
+        if not payload:
+            return
+        for line in payload.splitlines():
+            row: dict[str, object] = {
+                "files": file_count,
+                "threads": threads,
+                "repeat": repeat,
+            }
+            for token in line.split()[1:]:
+                if "=" not in token:
+                    continue
+                key, value = token.split("=", 1)
+                row[key] = value
+            diagnostic_rows.append(row)
 
-            rows.append(
-                {
-                    "threads": jobs,
-                    "repeat": rep,
-                    "files": len(files),
-                    "wall_ms": f"{wall_ms:.3f}",
-                    "outcome": outcome,
-                    "returncode": rc,
-                    "error_tail": err_tail,
-                }
-            )
+    for file_count in file_counts:
+        files = generate_parser_workload(task_dir / f"workload_{file_count}", file_count=file_count)
+        obj_dir = task_dir / f"obj_{file_count}"
+        for jobs in thread_values:
+            for rep in range(1, repeats + 1):
+                key = (file_count, jobs)
+                outcome, wall_ms, rc, err_tail, err_excerpt, diag_payload = compile_incompiler_parse_probe(
+                    dmd=dmd,
+                    files=files,
+                    parse_threads=jobs,
+                    timeout_sec=timeout_sec,
+                    obj_dir=obj_dir,
+                    include_paths=include_paths,
+                    lock_mode=lock_mode,
+                    diagnostics=diagnostics,
+                )
+                if outcome == "ok":
+                    successful_by_key[key].append(wall_ms)
+                elif outcome == "crash":
+                    crash_count += 1
+                if outcome != "ok" and key not in first_failure_by_key:
+                    first_failure_by_key[key] = {
+                        "repeat": rep,
+                        "outcome": outcome,
+                        "returncode": rc,
+                        "error_tail": err_tail,
+                        "error_excerpt": err_excerpt,
+                    }
+                parse_diag_payload(diag_payload, file_count=file_count, threads=jobs, repeat=rep)
+
+                rows.append(
+                    {
+                        "files": file_count,
+                        "threads": jobs,
+                        "repeat": rep,
+                        "lock_mode": lock_mode,
+                        "wall_ms": f"{wall_ms:.3f}",
+                        "outcome": outcome,
+                        "returncode": rc,
+                        "error_tail": err_tail,
+                    }
+                )
 
     write_csv(
         task_dir / "results.csv",
-        ["threads", "repeat", "files", "wall_ms", "outcome", "returncode", "error_tail"],
+        ["files", "threads", "repeat", "lock_mode", "wall_ms", "outcome", "returncode", "error_tail"],
         rows,
     )
 
-    base_threads = min(thread_values)
-    baseline_samples = successful_by_jobs.get(base_threads, [])
     speed_rows: list[dict[str, object]] = []
-    max_speedup = float("nan")
-
-    if baseline_samples:
-        baseline_med = statistics.median(baseline_samples)
-        max_speedup = 1.0
+    base_threads = min(thread_values)
+    best_speedup = 1.0
+    speedup_goal_met = False
+    all_runs_clean = True
+    for file_count in file_counts:
+        baseline_samples = successful_by_key.get((file_count, base_threads), [])
+        baseline_med = statistics.median(baseline_samples) if baseline_samples else None
         for jobs in sorted(thread_values):
-            samples = successful_by_jobs.get(jobs, [])
+            samples = successful_by_key.get((file_count, jobs), [])
+            successful_runs = len(samples)
+            if successful_runs != repeats:
+                all_runs_clean = False
             if samples:
                 med = statistics.median(samples)
-                speedup = baseline_med / med if med > 0 else float("nan")
-                max_speedup = max(max_speedup, speedup)
+                speedup = (baseline_med / med) if baseline_med and med > 0 else float("nan")
+                if math.isfinite(speedup):
+                    best_speedup = max(best_speedup, speedup)
+                    if file_count >= 128 and jobs > base_threads and successful_runs == repeats and speedup >= 1.10:
+                        speedup_goal_met = True
                 speed_rows.append(
                     {
+                        "files": file_count,
                         "threads": jobs,
-                        "successful_runs": len(samples),
+                        "lock_mode": lock_mode,
+                        "successful_runs": successful_runs,
                         "median_wall_ms": f"{med:.3f}",
-                        "speedup_vs_1": f"{speedup:.3f}",
+                        "speedup_vs_1": format_float(speedup),
                     }
                 )
             else:
                 speed_rows.append(
                     {
+                        "files": file_count,
                         "threads": jobs,
+                        "lock_mode": lock_mode,
                         "successful_runs": 0,
                         "median_wall_ms": "",
                         "speedup_vs_1": "",
                     }
                 )
-    else:
-        for jobs in sorted(thread_values):
-            speed_rows.append(
-                {
-                    "threads": jobs,
-                    "successful_runs": 0,
-                    "median_wall_ms": "",
-                    "speedup_vs_1": "",
-                }
-            )
 
-    write_csv(task_dir / "speedup.csv", ["threads", "successful_runs", "median_wall_ms", "speedup_vs_1"], speed_rows)
+    write_csv(
+        task_dir / "speedup.csv",
+        ["files", "threads", "lock_mode", "successful_runs", "median_wall_ms", "speedup_vs_1"],
+        speed_rows,
+    )
 
-    if first_failure_by_thread:
+    if diagnostic_rows:
+        write_csv_dynamic(task_dir / "diagnostics.csv", diagnostic_rows)
+
+    if first_failure_by_key:
         failure_lines = ["# First failure by thread count", ""]
-        for jobs in sorted(first_failure_by_thread):
-            f = first_failure_by_thread[jobs]
-            failure_lines.append(f"## threads={jobs}")
+        for file_count, jobs in sorted(first_failure_by_key):
+            f = first_failure_by_key[(file_count, jobs)]
+            failure_lines.append(f"## files={file_count}, threads={jobs}")
             failure_lines.append(f"- repeat: {f['repeat']}")
             failure_lines.append(f"- outcome: {f['outcome']}")
             failure_lines.append(f"- returncode: {f['returncode']}")
@@ -1737,23 +2919,27 @@ def run_incompiler_parser_parallel_experiment(
                 failure_lines.append("")
         (task_dir / "failure_snippets.md").write_text("\n".join(failure_lines) + "\n", encoding="utf-8")
 
-    all_threads_clean = all(
-        len(successful_by_jobs.get(jobs, [])) == total_by_jobs.get(jobs, 0)
-        and total_by_jobs.get(jobs, 0) > 0
-        for jobs in sorted(set(thread_values))
-    )
-    status = "done" if all_threads_clean and baseline_samples else "blocked"
+    performance_status = "done" if speedup_goal_met else "partial"
+    if all_runs_clean and (lock_mode != "narrow" or speedup_goal_met or max(file_counts) < 128):
+        status = "done"
+    elif all_runs_clean:
+        status = "partial"
+    else:
+        status = "blocked"
     return task_result(
         "run DMD Lexer/Parser in parallel (in-compiler threaded prototype)",
         status,
         thread_values=",".join(str(x) for x in sorted(thread_values)),
         repeats=repeats,
-        files=len(files),
+        file_counts=",".join(str(x) for x in file_counts),
+        lock_mode=lock_mode,
         crashes=crash_count,
-        failed_thread_counts=",".join(str(j) for j in sorted(first_failure_by_thread)) if first_failure_by_thread else "",
-        max_speedup_vs_1=round(max_speedup, 3) if baseline_samples else "",
-        env_knob="DMD_PARSE_THREADS",
-        methodology="single compiler process; ParserParallelPrototype currently uses a correctness-first parse lock safety guard",
+        failed_keys=",".join(f"{file_count}x{jobs}" for file_count, jobs in sorted(first_failure_by_key)) if first_failure_by_key else "",
+        max_speedup_vs_1=round(best_speedup, 3),
+        performance_status=performance_status,
+        speedup_goal_met=int(speedup_goal_met),
+        env_knobs="DMD_PARSE_THREADS,DMD_PARSE_LOCK_MODE,DMD_PARSE_DIAGNOSTICS",
+        methodology="single compiler process; ParserParallelPrototype measures coarse vs narrow lock modes",
     )
 
 
@@ -2195,7 +3381,7 @@ def run_allocator_compare(
     )
 
 
-def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict[str, object]:
+def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float, perf_bin: str = "") -> dict[str, object]:
     task_dir = out_dir / "dmd_profile_compare"
     task_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2285,13 +3471,14 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
         return "perf_failed", "perf commands returned non-zero"
 
     system_name = platform.system().lower()
-    if system_name == "linux" and shutil.which("perf"):
+    resolved_perf = perf_bin if perf_bin and Path(perf_bin).exists() else (shutil.which("perf") or "")
+    if system_name == "linux" and resolved_perf:
         perf_stat_file = task_dir / "perf_stat.txt"
         perf_record_file = task_dir / "perf.data"
         perf_report_file = task_dir / "perf_report.txt"
 
         perf_stat_cp = run_cmd(
-            ["perf", "stat", "-x,", "-o", str(perf_stat_file), exe_abs],
+            [resolved_perf, "stat", "-x,", "-o", str(perf_stat_file), exe_abs],
             cwd=task_dir,
             check=False,
             timeout=timeout_sec,
@@ -2299,7 +3486,7 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
         (task_dir / "perf_stat_stdout.txt").write_text(perf_stat_cp.stdout, encoding="utf-8")
         (task_dir / "perf_stat_stderr.txt").write_text(perf_stat_cp.stderr, encoding="utf-8")
         perf_record_cp = run_cmd(
-            ["perf", "record", "-F", "99", "-g", "-o", str(perf_record_file), exe_abs],
+            [resolved_perf, "record", "-F", "99", "-g", "-o", str(perf_record_file), exe_abs],
             cwd=task_dir,
             check=False,
             timeout=timeout_sec,
@@ -2308,7 +3495,7 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
         (task_dir / "perf_record_stderr.txt").write_text(perf_record_cp.stderr, encoding="utf-8")
 
         perf_report_cp = run_cmd(
-            ["perf", "report", "--stdio", "-i", str(perf_record_file)],
+            [resolved_perf, "report", "--stdio", "-i", str(perf_record_file)],
             cwd=task_dir,
             check=False,
             timeout=timeout_sec,
@@ -2331,12 +3518,28 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
                 perf_record_cp.stderr,
                 perf_report_cp.stderr,
             )
+        comparison_lines = [
+            "# dmd -profile vs Linux perf",
+            "",
+            f"- Profiler binary: `{resolved_perf}`",
+            f"- Trace log lines: {trace_lines}",
+            f"- trace.def exists: {int(trace_def.exists())}",
+            f"- perf_stat rc: {perf_stat_cp.returncode}",
+            f"- perf_record rc: {perf_record_cp.returncode}",
+            f"- perf_report rc: {perf_report_cp.returncode}",
+            f"- perf_report lines: {perf_report_lines}",
+            f"- profiler outcome: `{profiler_outcome}`",
+        ]
+        if profiler_reason:
+            comparison_lines.append(f"- profiler reason: {profiler_reason}")
+        (task_dir / "comparison_report.md").write_text("\n".join(comparison_lines) + "\n", encoding="utf-8")
         return task_result(
             "dmd -profile vs perf comparison",
             "done" if ok else "blocked",
             profiler_backend="perf",
             profiler_outcome=profiler_outcome,
             profiler_reason=profiler_reason,
+            perf_bin=resolved_perf,
             methodology="linux perf",
             trace_log_lines=trace_lines,
             trace_def_exists=int(trace_def.exists()),
@@ -2366,6 +3569,15 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
         (task_dir / "profiled_run_stdout.txt").write_text(run_cp.stdout + "\n---\n" + proc_out, encoding="utf-8")
         (task_dir / "profiled_run_stderr.txt").write_text(run_cp.stderr + "\n---\n" + proc_err, encoding="utf-8")
         sample_lines = len(sample_file.read_text(encoding="utf-8", errors="ignore").splitlines()) if sample_file.exists() else 0
+        comparison_lines = [
+            "# dmd -profile vs sample",
+            "",
+            f"- Trace log lines: {trace_lines}",
+            f"- trace.def exists: {int(trace_def.exists())}",
+            f"- sample lines: {sample_lines}",
+            f"- sample rc: {sample_cp.returncode}",
+        ]
+        (task_dir / "comparison_report.md").write_text("\n".join(comparison_lines) + "\n", encoding="utf-8")
 
         return task_result(
             "dmd -profile vs perf comparison",
@@ -2385,13 +3597,21 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
         profiler_backend="none",
         profiler_outcome="unsupported_host",
         profiler_reason="unsupported profiler setup for current host",
-        reason=f"unsupported host profiler setup: platform={platform.system()} perf={int(bool(shutil.which('perf')))} sample={int(bool(shutil.which('sample')))}",
+        reason=f"unsupported host profiler setup: platform={platform.system()} perf={int(bool(resolved_perf))} sample={int(bool(shutil.which('sample')))}",
         trace_log_lines=trace_lines,
         trace_def_exists=int(trace_def.exists()),
     )
 
 
-def gather_tool_versions(ldc2: str, dmd: str, clang: str) -> dict[str, str]:
+def gather_tool_versions(
+    ldc2: str,
+    dmd: str,
+    clang: str,
+    dub_bin: str = "",
+    ldmd2_bin: str = "",
+    ldc_profdata_bin: str = "",
+    perf_bin: str = "",
+) -> dict[str, str]:
     versions: dict[str, str] = {}
     versions["python"] = sys.version.split()[0]
     versions["platform"] = platform.platform()
@@ -2400,8 +3620,14 @@ def gather_tool_versions(ldc2: str, dmd: str, clang: str) -> dict[str, str]:
         "ldc2": [ldc2, "--version"],
         "dmd": [dmd, "--version"],
         "clang": [clang, "--version"],
+        "dub": [dub_bin, "--version"] if dub_bin else [],
+        "ldmd2": [ldmd2_bin, "--version"] if ldmd2_bin else [],
+        "ldc-profdata": [ldc_profdata_bin, "--version"] if ldc_profdata_bin else [],
         "objdump": ["objdump", "--version"],
     }.items():
+        if not cmd:
+            versions[key] = ""
+            continue
         exe = cmd[0]
         available = True
         if "/" in exe:
@@ -2420,8 +3646,9 @@ def gather_tool_versions(ldc2: str, dmd: str, clang: str) -> dict[str, str]:
         text = (cp.stdout or cp.stderr).strip().splitlines()
         versions[key] = text[0] if text else ""
 
-    if shutil.which("perf"):
-        cp = run_cmd(["perf", "--version"], check=False, timeout=20.0)
+    resolved_perf = perf_bin if perf_bin and Path(perf_bin).exists() else (shutil.which("perf") or "")
+    if resolved_perf:
+        cp = run_cmd([resolved_perf, "--version"], check=False, timeout=20.0)
         text = (cp.stdout or cp.stderr).strip().splitlines()
         versions["perf"] = text[0] if text else ""
     if shutil.which("sample"):
@@ -2457,6 +3684,35 @@ def render_status_report(path: Path, results: list[dict[str, object]]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def render_runtime_libs_report(out_dir: Path, results: list[dict[str, object]]) -> None:
+    task_keys = {
+        "benchmark D GC kernels": "gc_kernels",
+        "benchmark D associative arrays": "aa_kernels",
+        "benchmark D float-to-string conversion": "float_to_string_kernels",
+    }
+    selected = [result for result in results if str(result.get("task", "")) in task_keys]
+    if not selected:
+        return
+
+    rows = []
+    for result in selected:
+        task = str(result.get("task", ""))
+        rows.append(
+            [
+                task,
+                result.get("status", ""),
+                f"{task_keys[task]}/report.md",
+            ]
+        )
+
+    lines = [
+        "# Runtime-library benchmark aggregate",
+        "",
+        *emit_markdown_table(["Task", "Status", "Artifact"], rows),
+    ]
+    (out_dir / "runtime_libs_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def parse_int_list(csv_value: str) -> list[int]:
     out: list[int] = []
     for raw in csv_value.split(","):
@@ -2470,15 +3726,19 @@ def parse_int_list(csv_value: str) -> list[int]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", default="artifacts/not_done", help="Output directory")
-    parser.add_argument("--phase", choices=["quick", "analysis", "invasive", "all"], default="all")
+    parser.add_argument("--phase", choices=["quick", "analysis", "invasive", "runtime_libs", "broader_gist", "all"], default="all")
     parser.add_argument("--tasks", default="", help="Comma-separated task keys to run")
     parser.add_argument("--skip-perfetto", action="store_true", help="Skip perfetto screenshot task")
     parser.add_argument("--max-rigor", action="store_true", help="Use higher run counts and sweeps")
 
     parser.add_argument("--ldc2", default=".locald/ldc-1.42.0/bin/ldc2", help="Path to ldc2")
     parser.add_argument("--dmd", default=".locald/dmd-nightly/osx/bin/dmd", help="Path to dmd")
+    parser.add_argument("--dub-bin", default=".locald/ldc-1.42.0/bin/dub", help="Path to dub")
+    parser.add_argument("--ldmd2-bin", default=".locald/ldc-1.42.0/bin/ldmd2", help="Path to ldmd2")
+    parser.add_argument("--ldc-profdata-bin", default=".locald/ldc-1.42.0/bin/ldc-profdata", help="Path to ldc-profdata")
     parser.add_argument("--rdmd-bin", default=".locald/ldc-1.42.0/bin/rdmd", help="Path to rdmd for DMD build.d")
     parser.add_argument("--clang", default="clang", help="Path to clang")
+    parser.add_argument("--perf-bin", default=os.environ.get("PERF_BIN", ""), help="Path to perf binary (or PERF_BIN env)")
     parser.add_argument(
         "--phobos-archive",
         default=".locald/dmd-nightly/osx/lib/libphobos2.a",
@@ -2486,10 +3746,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--benchmark", default="benchmark.d", help="Benchmark source file for compiler timing")
     parser.add_argument("--dmd-repo", default="external/dmd", help="Path to cloned dmd repository")
+    parser.add_argument(
+        "--dub-pgo-workspace",
+        default="benchmarks/dub_pgo_workspace",
+        help="Path to the checked-in workspace used to benchmark dub with PGO",
+    )
+    parser.add_argument("--dub-upstream-ref", default="master", help="Git ref for dlang/dub used in the PGO benchmark")
 
     parser.add_argument("--zero-cost-runs", type=int, default=9, help="Measured runs per mode")
     parser.add_argument("--zero-cost-warmups", type=int, default=2, help="Warmup runs per mode")
     parser.add_argument("--zero-cost-iters", type=int, default=25, help="Function invocations per run")
+    parser.add_argument("--runtime-runs", type=int, default=7, help="Measured runs for runtime-library kernels")
+    parser.add_argument("--runtime-warmups", type=int, default=2, help="Warmup runs for runtime-library kernels")
+    parser.add_argument("--dub-pgo-runs", type=int, default=5, help="Measured runs per dub command for PGO comparison")
 
     parser.add_argument("--fuzz-iters", type=int, default=120, help="Number of fuzz iterations")
     parser.add_argument("--fuzz-timeout", type=float, default=2.0, help="Per-sample compile timeout")
@@ -2500,8 +3769,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--struct-max-candidates", type=int, default=80, help="Max struct probes per project")
 
     parser.add_argument("--parser-file-count", type=int, default=48, help="Generated file count for parser benchmarks")
+    parser.add_argument("--parser-file-counts", default="", help="Comma-separated parser benchmark corpus sizes")
     parser.add_argument("--parser-threads", default="1,2,4,8", help="Comma-separated parser benchmark thread counts")
     parser.add_argument("--parser-repeats", type=int, default=3, help="Repeats per parser thread count")
+    parser.add_argument("--parser-lock-mode", choices=["coarse", "narrow"], default="narrow", help="Parser prototype lock mode")
+    parser.add_argument("--parser-diagnostics", action="store_true", help="Enable parser prototype timing diagnostics")
 
     parser.add_argument("--allocator-runs", type=int, default=7, help="Runs for allocator comparison")
     parser.add_argument("--allocator-warmups", type=int, default=2, help="Warmups for allocator comparison")
@@ -2544,6 +3816,9 @@ def apply_max_rigor_defaults(args: argparse.Namespace) -> None:
     args.zero_cost_runs = max(args.zero_cost_runs, 21)
     args.zero_cost_warmups = max(args.zero_cost_warmups, 5)
     args.zero_cost_iters = max(args.zero_cost_iters, 40)
+    args.runtime_runs = max(args.runtime_runs, 11)
+    args.runtime_warmups = max(args.runtime_warmups, 3)
+    args.dub_pgo_runs = max(args.dub_pgo_runs, 7)
 
     args.fuzz_iters = max(args.fuzz_iters, 1000)
     args.fuzz_timeout = max(args.fuzz_timeout, 3.0)
@@ -2574,18 +3849,35 @@ def main() -> int:
 
     ldc2 = str(Path(args.ldc2).expanduser().resolve())
     dmd = str(Path(args.dmd).expanduser().resolve())
+    dub_bin = str(Path(args.dub_bin).expanduser().resolve())
+    ldmd2_bin = str(Path(args.ldmd2_bin).expanduser().resolve())
+    ldc_profdata_bin = str(Path(args.ldc_profdata_bin).expanduser().resolve())
     rdmd_bin = Path(args.rdmd_bin).expanduser().resolve()
     clang = args.clang
+    perf_bin = str(Path(args.perf_bin).expanduser().resolve()) if args.perf_bin else ""
     phobos_archive = Path(args.phobos_archive).expanduser().resolve()
     dmd_repo = Path(args.dmd_repo).expanduser().resolve()
     benchmark_file = Path(args.benchmark).expanduser().resolve()
+    dub_pgo_workspace = Path(args.dub_pgo_workspace).expanduser().resolve()
 
-    tasks_need_ldc2 = {"zero_cost", "linker_strip", "allocator_compare", "c_vs_d_asm", "large_char_array"}
+    tasks_need_ldc2 = {
+        "zero_cost",
+        "gc_kernels",
+        "aa_kernels",
+        "float_to_string_kernels",
+        "linker_strip",
+        "allocator_compare",
+        "c_vs_d_asm",
+        "large_char_array",
+    }
     tasks_need_dmd = {"non_zero_init_structs", "ast_field_order", "parser_parallel", "parser_incompiler_parallel", "dmd_profile_compare", "compiler_fuzz"}
     tasks_need_clang = {"c_vs_d_asm"}
     tasks_need_phobos_archive = {"phobos_sections"}
     tasks_need_benchmark = {"ast_field_order"}
     tasks_need_rdmd = {"ast_field_order"}
+    tasks_need_dub = {"dub_pgo"}
+    tasks_need_ldmd2 = {"dub_pgo"}
+    tasks_need_profdata = {"dub_pgo"}
 
     if any(task in tasks_need_ldc2 for task in selected_tasks) and not Path(ldc2).exists():
         print(f"ldc2 not found: {ldc2}", file=sys.stderr)
@@ -2605,14 +3897,33 @@ def main() -> int:
     if any(task in tasks_need_rdmd for task in selected_tasks) and not rdmd_bin.exists():
         print(f"rdmd not found: {rdmd_bin}", file=sys.stderr)
         return 2
+    if any(task in tasks_need_dub for task in selected_tasks) and not Path(dub_bin).exists():
+        print(f"dub not found: {dub_bin}", file=sys.stderr)
+        return 2
+    if any(task in tasks_need_ldmd2 for task in selected_tasks) and not Path(ldmd2_bin).exists():
+        print(f"ldmd2 not found: {ldmd2_bin}", file=sys.stderr)
+        return 2
+    if any(task in tasks_need_profdata for task in selected_tasks) and not Path(ldc_profdata_bin).exists():
+        print(f"ldc-profdata not found: {ldc_profdata_bin}", file=sys.stderr)
+        return 2
 
     manifest: dict[str, object] = {
         "generated_at": now_utc(),
         "selected_tasks": selected_tasks,
         "phase": args.phase,
         "args": vars(args),
-        "tool_versions": gather_tool_versions(ldc2=ldc2, dmd=dmd, clang=clang),
+        "tool_versions": gather_tool_versions(
+            ldc2=ldc2,
+            dmd=dmd,
+            clang=clang,
+            dub_bin=dub_bin,
+            ldmd2_bin=ldmd2_bin,
+            ldc_profdata_bin=ldc_profdata_bin,
+            perf_bin=perf_bin,
+        ),
     }
+
+    parser_file_counts = parse_int_list(args.parser_file_counts) if args.parser_file_counts.strip() else [args.parser_file_count]
 
     task_funcs: dict[str, callable[[], dict[str, object]]] = {
         "perfetto": lambda: attempt_perfetto_screenshot(out_dir=out_dir, trace_file=Path("artifacts/trace.json"), timeout_sec=max(args.task_timeout, 360.0)),
@@ -2624,6 +3935,38 @@ def main() -> int:
             iterations=args.zero_cost_iters,
         ),
         "phobos_sections": lambda: run_phobos_section_analysis(out_dir=out_dir, archive_path=phobos_archive),
+        "gc_kernels": lambda: run_gc_kernel_experiment(
+            out_dir=out_dir,
+            ldc2=ldc2,
+            runs=args.runtime_runs,
+            warmups=args.runtime_warmups,
+            timeout_sec=max(args.task_timeout, 240.0),
+        ),
+        "aa_kernels": lambda: run_aa_kernel_experiment(
+            out_dir=out_dir,
+            ldc2=ldc2,
+            runs=args.runtime_runs,
+            warmups=args.runtime_warmups,
+            timeout_sec=max(args.task_timeout, 300.0),
+        ),
+        "float_to_string_kernels": lambda: run_float_to_string_experiment(
+            out_dir=out_dir,
+            ldc2=ldc2,
+            runs=args.runtime_runs,
+            warmups=args.runtime_warmups,
+            timeout_sec=max(args.task_timeout, 240.0),
+        ),
+        "dub_pgo": lambda: run_dub_pgo_experiment(
+            out_dir=out_dir,
+            dub_bin=dub_bin,
+            ldmd2_bin=ldmd2_bin,
+            ldc_profdata_bin=ldc_profdata_bin,
+            runs=args.dub_pgo_runs,
+            timeout_sec=max(args.task_timeout, 2400.0),
+            clone_timeout=args.clone_timeout,
+            workspace_root=dub_pgo_workspace,
+            upstream_ref=args.dub_upstream_ref,
+        ),
         "non_zero_init_structs": lambda: run_non_zero_init_struct_scan(
             out_dir=out_dir,
             dmd=dmd,
@@ -2649,7 +3992,7 @@ def main() -> int:
         "parser_parallel": lambda: run_parallel_parser_experiment(
             out_dir=out_dir,
             dmd=dmd,
-            file_count=args.parser_file_count,
+            file_count=max(parser_file_counts),
             thread_values=parse_int_list(args.parser_threads),
             repeats=args.parser_repeats,
             timeout_sec=max(args.task_timeout, 90.0),
@@ -2657,10 +4000,12 @@ def main() -> int:
         "parser_incompiler_parallel": lambda: run_incompiler_parser_parallel_experiment(
             out_dir=out_dir,
             dmd=dmd,
-            file_count=args.parser_file_count,
+            file_counts=parser_file_counts,
             thread_values=parse_int_list(args.parser_threads),
             repeats=args.parser_repeats,
             timeout_sec=max(args.task_timeout, 180.0),
+            lock_mode=args.parser_lock_mode,
+            diagnostics=args.parser_diagnostics,
         ),
         "allocator_compare": lambda: run_allocator_compare(
             out_dir=out_dir,
@@ -2671,7 +4016,12 @@ def main() -> int:
             timeout_sec=max(args.task_timeout, 120.0),
         ),
         "c_vs_d_asm": lambda: run_c_vs_d_asm_experiment(out_dir=out_dir, ldc2=ldc2, clang=clang),
-        "dmd_profile_compare": lambda: run_dmd_profile_compare(out_dir=out_dir, dmd=dmd, timeout_sec=max(args.task_timeout, 180.0)),
+        "dmd_profile_compare": lambda: run_dmd_profile_compare(
+            out_dir=out_dir,
+            dmd=dmd,
+            timeout_sec=max(args.task_timeout, 180.0),
+            perf_bin=perf_bin,
+        ),
         "compiler_fuzz": lambda: run_fuzz_experiment(
             out_dir=out_dir,
             dmd=dmd,
@@ -2687,6 +4037,10 @@ def main() -> int:
         "perfetto": "perfetto screenshot",
         "zero_cost": "zero-cost abstraction",
         "phobos_sections": "phobos section size analysis",
+        "gc_kernels": "GC kernels",
+        "aa_kernels": "associative-array kernels",
+        "float_to_string_kernels": "float-to-string kernels",
+        "dub_pgo": "dub PGO benchmark",
         "non_zero_init_structs": "large non-zero-init struct scan",
         "linker_strip": "linker strip behavior",
         "ast_field_order": "AST field-order cache-locality",
@@ -2714,6 +4068,7 @@ def main() -> int:
 
     write_csv_dynamic(out_dir / "status.csv", results)
     render_status_report(out_dir / "status.md", results)
+    render_runtime_libs_report(out_dir, results)
 
     manifest["results_count"] = len(results)
     manifest["completed_at"] = now_utc()

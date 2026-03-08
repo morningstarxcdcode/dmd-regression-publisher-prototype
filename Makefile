@@ -1,4 +1,4 @@
-.PHONY: bench-latest bench-compatible bench-both analyze-both trace switch-bench not-done not-done-perfetto linux-gap-close build-parser-threaded-dmd parser-thread-compare all clean
+.PHONY: bench-latest bench-compatible bench-both analyze-both trace switch-bench not-done not-done-perfetto runtime-libs dub-pgo broader-gist strict-perf-probe linux-gap-close build-parser-threaded-dmd parser-thread-compare all clean
 
 PYTHON := $(if $(wildcard .venv/bin/python),$(CURDIR)/.venv/bin/python,python3)
 BASELINE_DMD ?= ./external/dmd/generated/osx/release/64/dmd
@@ -28,6 +28,18 @@ not-done:
 not-done-perfetto:
 	$(PYTHON) ./not_done_experiments.py --out-dir artifacts/not_done --attempt-perfetto-screenshot
 
+runtime-libs:
+	$(PYTHON) ./not_done_experiments.py --out-dir artifacts/not_done --phase runtime_libs
+
+dub-pgo:
+	$(PYTHON) ./not_done_experiments.py --out-dir artifacts/not_done --tasks dub_pgo
+
+broader-gist:
+	$(PYTHON) ./not_done_experiments.py --out-dir artifacts/not_done --phase broader_gist
+
+strict-perf-probe:
+	./strict_perf_probe.sh --out-dir artifacts/strict_perf_probe
+
 linux-gap-close:
 	./linux_gap_close.sh --python-bin "$(PYTHON)"
 
@@ -35,7 +47,7 @@ build-parser-threaded-dmd:
 	./build_parser_threaded_dmd.sh --host-dmd ./.locald/dmd-nightly/osx/bin/dmd
 
 parser-thread-compare:
-	./parser_threading_compare.sh --python-bin "$(PYTHON)" --baseline-dmd "$(BASELINE_DMD)" --threaded-dmd "$(THREADED_DMD)"
+	./parser_threading_compare.sh --python-bin "$(PYTHON)" --baseline-dmd "$(BASELINE_DMD)" --threaded-dmd "$(THREADED_DMD)" --file-counts 64,128,256
 
 all: bench-both analyze-both trace
 	$(PYTHON) ./analyze_results.py --input-dir artifacts --tracks latest20,compatible20 --out-dir artifacts --trace-summary artifacts/trace_phase_summary.csv --granularity-csv artifacts/trace_granularity_sweep.csv

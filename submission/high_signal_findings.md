@@ -8,15 +8,15 @@ Generated: 2026-03-08
 - Result: `3000 -> 10000` cases shows `x6.338` compile-time multiplier, much steeper than lower ranges.
 - Why it matters: regression publisher should include stress-shape benchmarks, not only small/medium synthetic inputs.
 
-## 2) In-compiler parser prototype now passes strict 1/2/4-thread runs on this host
+## 2) In-compiler parser prototype now has a real narrow-path implementation, but it is still slower
 
 - Evidence:
-  - `artifacts/upgrades/parser_thread_compare_final/comparison.csv`
-  - `artifacts/upgrades/parser_thread_compare_final/threaded/parser_incompiler_parallel/speedup.csv`
+  - `artifacts/upgrades/parser_thread_compare_narrow/comparison.csv`
+  - `artifacts/upgrades/parser_thread_compare_narrow/threaded/parser_incompiler_parallel/speedup.csv`
 - Result:
-  - baseline and prototype candidate both completed `3/3` successful runs at `1`, `2`, and `4` threads.
-  - correctness is stable, but performance is not yet consistently better than baseline because the current prototype uses a parse-lock safety guard.
-- Why it matters: the project moved from surrogate-only evidence to a real single-process compiler prototype with strict pass criteria, and the next step is removing the safety bottleneck safely.
+  - baseline and narrow-path candidate both completed successful runs at `1`, `2`, and `4` threads for `64` and `128` files.
+  - narrow mode is still materially slower than coarse mode on this host, so parser performance remains partial.
+- Why it matters: the project moved from surrogate-only evidence to a real single-process compiler prototype with a split parse/commit path, and now has concrete evidence for where the remaining cost lives.
 
 ## 3) Allocator swap shows minimal compile-time delta on this host
 
@@ -55,3 +55,14 @@ Generated: 2026-03-08
 - Evidence: `artifacts/report.md`
 - Result: latest20 track has crash-only outcomes on this host; compatible20 is required for stable timing comparisons.
 - Why it matters: reporting must separate "latest availability reality" from "regression-quality timing dataset".
+
+## 8) Runtime-library kernels are now benchmarked directly
+
+- Evidence:
+  - `artifacts/upgrades/runtime_libs_smoke/gc_kernels/report.md`
+  - `artifacts/upgrades/runtime_libs_smoke/aa_kernels/report.md`
+  - `artifacts/upgrades/runtime_libs_smoke/float_to_string_kernels/report.md`
+- Result:
+  - GC, associative arrays, and float-to-string now have reproducible kernel benchmarks in the repo.
+  - `dub` PGO is also implemented, but current local execution is blocked by DNS/network access to `github.com`.
+- Why it matters: this closes most of the broader-gist implementation gap with concrete, rerunnable tasks instead of narrative-only intent.

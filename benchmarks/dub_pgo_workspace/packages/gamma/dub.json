@@ -1,0 +1,5 @@
+{
+  "name": "gamma",
+  "targetType": "library",
+  "sourcePaths": ["source"]
+}

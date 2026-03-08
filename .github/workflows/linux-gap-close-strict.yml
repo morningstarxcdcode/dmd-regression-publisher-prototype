@@ -66,6 +66,14 @@ jobs:
           command -v perf
           ls -l "$(command -v perf)"
           perf --version
+          echo "PERF_BIN=$(command -v perf)" >> "$GITHUB_ENV"
+
+      - name: Probe strict perf readiness
+        shell: bash
+        run: |
+          set -euxo pipefail
+          chmod +x strict_perf_probe.sh
+          ./strict_perf_probe.sh --out-dir artifacts/strict_perf_probe --perf-bin "$PERF_BIN"
 
       - name: Setup Python venv
         shell: bash
@@ -106,6 +114,7 @@ jobs:
           ./linux_gap_close.sh \
             --python-bin ./.venv/bin/python \
             --gate-b-mode strict \
+            --perf-bin "$PERF_BIN" \
             --profile-dmd-bin ./.locald/dmd-nightly/linux/bin64/dmd \
             --parser-dmd-bin "$THREADED_DMD"
 
@@ -125,7 +134,8 @@ jobs:
             --threaded-dmd "$THREADED_DMD" \
             --threads 1,2,4 \
             --repeats 3 \
-            --file-count 64 \
+            --file-counts 64,128 \
+            --threaded-lock-mode narrow \
             --out-dir artifacts/linux_gap_close/parser_thread_compare_linux
 
       - name: Upload strict Linux gap-close artifacts
@@ -133,4 +143,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-gap-close-strict-artifacts
-          path: artifacts/linux_gap_close/
+          path: |
+            artifacts/linux_gap_close/
+            artifacts/strict_perf_probe/

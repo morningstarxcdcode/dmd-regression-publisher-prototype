@@ -52,6 +52,7 @@ Strict path gives:
 - latest20 + compatible20 timing on Linux archives
 - `dmd_profile_compare` using Linux `perf` path
 - in-compiler parser benchmark (`parser_incompiler_parallel`)
+- optional strict perf readiness probe via `./strict_perf_probe.sh`
 - PASS/FAIL gates in `summary.md` (script exits non-zero if a gate fails)
 
 Hosted workflow gives:
@@ -77,7 +78,8 @@ If you are using the prototype in this repo, build candidate binary first:
   --python-bin ./.venv/bin/python \
   --threads 1,2,4,8 \
   --repeats 5 \
-  --file-count 96
+  --file-counts 64,128,256 \
+  --threaded-lock-mode narrow
 ```
 
 Outputs:
@@ -85,6 +87,12 @@ Outputs:
 - `artifacts/parser_thread_compare/baseline/parser_incompiler_parallel/speedup.csv`
 - `artifacts/parser_thread_compare/threaded/parser_incompiler_parallel/speedup.csv`
 - `artifacts/parser_thread_compare/comparison.csv`
+
+Notes:
+
+- baseline is always run with `--parser-lock-mode coarse`
+- threaded candidate should normally run with `--threaded-lock-mode narrow`
+- `summary.md` treats parser speedup as an explicit advisory gate, not a fake success
 
 ## Suggested submission evidence links
 
