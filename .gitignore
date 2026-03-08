@@ -1,0 +1,8 @@
+.cache/
+artifacts/
+*.o
+.venv/
+.locald/
+.DS_Store
+__pycache__/
+external/

@@ -1,0 +1,132 @@
+diff --git a/compiler/src/dmd/main.d b/compiler/src/dmd/main.d
+index dbbde28..f67a7dc 100644
+--- a/compiler/src/dmd/main.d
++++ b/compiler/src/dmd/main.d
+@@ -22,6 +22,10 @@ version (NoMain) {} else
+ import core.stdc.stdio;
+ import core.stdc.stdlib;
+ import core.stdc.string;
++version (ParserParallelPrototype)
++{
++import core.thread : Thread;
++}
+ 
+ import dmd.arraytypes : Modules, Strings;
+ import dmd.astenums;
+@@ -152,6 +156,63 @@ extern (C) int _Dmain(const(char)[][] dargs)
+ 
+ private:
+ 
++version (ParserParallelPrototype)
++private int parserThreadsFromEnv()
++{
++    const(char)* v = getenv("DMD_PARSE_THREADS");
++    if (!v || !v[0])
++        return 1;
++
++    const int parsed = atoi(v);
++    if (parsed <= 1)
++        return 1;
++
++    return parsed > 64 ? 64 : parsed;
++}
++
++version (ParserParallelPrototype)
++private bool parseRootModulesInParallel(ref Modules modules, int threads)
++{
++    if (threads <= 1 || modules.length < 2)
++        return false;
++
++    Object parseLock = new Object();
++
++    Thread createParseWorker(ref Modules modulesRef, size_t start, size_t stride)
++    {
++        return new Thread(
++            {
++                for (size_t i = start; i < modulesRef.length; i += stride)
++                {
++                    auto m = modulesRef[i];
++                    if (m)
++                    {
++                        // Prototype safety guard: frontend globals are not thread-safe yet.
++                        synchronized (parseLock)
++                            m.parse();
++                    }
++                }
++            }
++        );
++    }
++
++    Thread[] workers;
++    workers.length = cast(size_t) threads;
++    const stride = cast(size_t) threads;
++
++    foreach (tid; 0 .. threads)
++    {
++        const workerId = cast(size_t) tid;
++        workers[workerId] = createParseWorker(modules, workerId, stride);
++        workers[workerId].start();
++    }
++
++    foreach (w; workers)
++        w.join();
++
++    return true;
++}
++
+ /**
+  * DMD's real entry point
+  *
+@@ -490,18 +551,43 @@ private int tryMain(const(char)[][] argv, out Param params)
+     timeTraceBeginEvent(TimeTraceEventType.parseGeneral);
+     scope (exit) timeTraceEndEvent(TimeTraceEventType.parseGeneral);
+     size_t filecount = modules.length;
++    bool parsedInParallel = false;
++
++    version (ParserParallelPrototype)
++    {
++        const parseThreads = parserThreadsFromEnv();
++        const canUseParallelParse = !params.ddoc.doOutput && !params.dihdr.doOutput && !params.makeDeps.doOutput;
++        if (parseThreads > 1 && canUseParallelParse)
++        {
++            foreach (m; modules)
++            {
++                if (params.v.verbose)
++                    message("parse     %s", m.toChars());
++                if (!Module.rootModule)
++                    Module.rootModule = m;
++                m.importedFrom = m; // m.isRoot() == true
++            }
++            parsedInParallel = parseRootModulesInParallel(modules, parseThreads);
++            if (params.v.verbose)
++                message("parse-parallel requested=%d used=%d modules=%llu", parseThreads, parsedInParallel ? parseThreads : 1, cast(ulong) modules.length);
++        }
++    }
++
+     for (size_t filei = 0, modi = 0; filei < filecount; filei++, modi++)
+     {
+         Module m = modules[modi];
+-        if (params.v.verbose)
+-            message("parse     %s", m.toChars());
+-        if (!Module.rootModule)
+-            Module.rootModule = m;
+-        m.importedFrom = m; // m.isRoot() == true
+-//        if (!driverParams.oneobj || modi == 0 || m.isDocFile)
+-//            m.deleteObjFile();
+-
+-        m.parse();
++        if (!parsedInParallel)
++        {
++            if (params.v.verbose)
++                message("parse     %s", m.toChars());
++            if (!Module.rootModule)
++                Module.rootModule = m;
++            m.importedFrom = m; // m.isRoot() == true
++//          if (!driverParams.oneobj || modi == 0 || m.isDocFile)
++//              m.deleteObjFile();
++
++            m.parse();
++        }
+ 
+         // Finalize output filenames. Update if `-oq` was specified (only feasible after parsing).
+         if (params.fullyQualifiedObjectFiles && m.md)

@@ -1,0 +1,49 @@
+name: Linux Gap Close
+
+on:
+  workflow_dispatch:
+
+jobs:
+  gap-close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Linux perf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y linux-perf
+          perf --version
+
+      - name: Setup Python venv
+        run: |
+          python3 -m venv .venv
+          ./.venv/bin/pip install --upgrade pip
+          ./.venv/bin/pip install matplotlib
+
+      - name: Install DMD nightly
+        run: |
+          curl -fsSL https://dlang.org/install.sh | bash -s -- -p ./.locald install dmd-nightly
+          ./.locald/dmd-nightly/linux/bin64/dmd --version
+
+      - name: Run Linux gap close gates
+        run: |
+          chmod +x linux_gap_close.sh
+          ./linux_gap_close.sh \
+            --python-bin ./.venv/bin/python \
+            --dmd-bin ./.locald/dmd-nightly/linux/bin64/dmd
+
+      - name: Upload Linux gap-close artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-gap-close-artifacts
+          path: artifacts/linux_gap_close/
