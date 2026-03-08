@@ -2277,12 +2277,16 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float) -> dict
             check=False,
             timeout=timeout_sec,
         )
+        (task_dir / "perf_stat_stdout.txt").write_text(perf_stat_cp.stdout, encoding="utf-8")
+        (task_dir / "perf_stat_stderr.txt").write_text(perf_stat_cp.stderr, encoding="utf-8")
         perf_record_cp = run_cmd(
             ["perf", "record", "-F", "99", "-g", "-o", str(perf_record_file), exe_abs],
             cwd=task_dir,
             check=False,
             timeout=timeout_sec,
         )
+        (task_dir / "perf_record_stdout.txt").write_text(perf_record_cp.stdout, encoding="utf-8")
+        (task_dir / "perf_record_stderr.txt").write_text(perf_record_cp.stderr, encoding="utf-8")
 
         perf_report_cp = run_cmd(
             ["perf", "report", "--stdio", "-i", str(perf_record_file)],

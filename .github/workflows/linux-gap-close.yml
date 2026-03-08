@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Linux perf
+      - name: Prepare Linux perf
         shell: bash
         run: |
           set -euxo pipefail
@@ -63,9 +63,11 @@ jobs:
             sudo ln -sf "$PERF_BIN" /usr/local/bin/perf
           fi
 
-          command -v perf
-          ls -l "$(command -v perf)"
-          perf --version
+          command -v perf || true
+          if command -v perf >/dev/null 2>&1; then
+            ls -l "$(command -v perf)" || true
+            perf --version || true
+          fi
 
       - name: Setup Python venv
         shell: bash

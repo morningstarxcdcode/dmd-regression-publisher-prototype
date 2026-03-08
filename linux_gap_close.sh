@@ -66,12 +66,11 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
     exit 2
 fi
 
-if ! command -v perf >/dev/null 2>&1; then
-    echo "perf is required but not found in PATH." >&2
-    exit 2
-fi
-
 mkdir -p "$ARTIFACT_ROOT"
+
+if ! command -v perf >/dev/null 2>&1; then
+    log "perf not available in PATH; Linux profile task may be reported as blocked."
+fi
 
 RELEASE_DIR="$ARTIFACT_ROOT/releases"
 NOT_DONE_DIR="$ARTIFACT_ROOT/not_done_linux"
