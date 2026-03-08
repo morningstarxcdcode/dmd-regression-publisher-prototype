@@ -28,6 +28,12 @@ jobs:
           sudo sysctl -w kernel.perf_event_paranoid=-1 || true
           sudo sysctl -w kernel.kptr_restrict=0 || true
 
+          KERNEL_REL="$(uname -r)"
+          KERNEL_FLAVOR="${KERNEL_REL##*-}"
+          KERNEL_ABI="${KERNEL_REL%-${KERNEL_FLAVOR}}"
+          KERNEL_ABI="${KERNEL_ABI%-}"
+          KERNEL_SERIES="${KERNEL_ABI%%.0-*}"
+
           if command -v perf >/dev/null 2>&1 && perf --version >/dev/null 2>&1; then
             perf --version
             exit 0
@@ -35,19 +41,23 @@ jobs:
 
           sudo apt-get update
           sudo apt-get install -y linux-tools-common || true
-          sudo apt-get install -y "linux-tools-$(uname -r)" || true
-          sudo apt-get install -y "linux-cloud-tools-$(uname -r)" || true
+          sudo apt-get install -y "linux-tools-$KERNEL_REL" || true
+          sudo apt-get install -y "linux-cloud-tools-$KERNEL_REL" || true
+          sudo apt-get install -y "linux-$KERNEL_FLAVOR-$KERNEL_SERIES-tools-$KERNEL_ABI" || true
+          sudo apt-get install -y "linux-$KERNEL_FLAVOR-$KERNEL_SERIES-cloud-tools-$KERNEL_ABI" || true
 
           PERF_BIN=""
-          if [ -x "/usr/lib/linux-tools-$(uname -r)/perf" ]; then
-            PERF_BIN="/usr/lib/linux-tools-$(uname -r)/perf"
-          elif [ -x "/usr/lib/linux-tools/$(uname -r)/perf" ]; then
-            PERF_BIN="/usr/lib/linux-tools/$(uname -r)/perf"
+          if [ -x "/usr/lib/linux-tools-$KERNEL_REL/perf" ]; then
+            PERF_BIN="/usr/lib/linux-tools-$KERNEL_REL/perf"
+          elif [ -x "/usr/lib/linux-tools/$KERNEL_REL/perf" ]; then
+            PERF_BIN="/usr/lib/linux-tools/$KERNEL_REL/perf"
+          elif [ -x "/usr/lib/linux-$KERNEL_FLAVOR-$KERNEL_SERIES-tools-$KERNEL_ABI/perf" ]; then
+            PERF_BIN="/usr/lib/linux-$KERNEL_FLAVOR-$KERNEL_SERIES-tools-$KERNEL_ABI/perf"
           else
-            PERF_BIN="$(find /usr/lib -type f \( -path "/usr/lib/linux-tools-*/perf" -o -path "/usr/lib/linux-tools/*/perf" \) 2>/dev/null | sort | grep "/$(uname -r)/perf\\|linux-tools-$(uname -r)/perf" | tail -n 1 || true)"
+            PERF_BIN="$(find /usr/lib -type f \( -path '/usr/lib/linux-tools-*/perf' -o -path '/usr/lib/linux-tools/*/perf' -o -path '/usr/lib/linux-*-tools-*/perf' \) 2>/dev/null | sort | grep "/$KERNEL_REL/perf\\|linux-tools-$KERNEL_REL/perf\\|linux-$KERNEL_FLAVOR-$KERNEL_SERIES-tools-$KERNEL_ABI/perf" | tail -n 1 || true)"
           fi
           if [ -z "$PERF_BIN" ]; then
-            PERF_BIN="$(find /usr/lib -type f \( -path "/usr/lib/linux-tools-*/perf" -o -path "/usr/lib/linux-tools/*/perf" \) 2>/dev/null | sort | tail -n 1 || true)"
+            PERF_BIN="$(find /usr/lib -type f \( -path '/usr/lib/linux-tools-*/perf' -o -path '/usr/lib/linux-tools/*/perf' -o -path '/usr/lib/linux-*-tools-*/perf' \) 2>/dev/null | sort | tail -n 1 || true)"
           fi
           if [ -n "$PERF_BIN" ]; then
             sudo ln -sf "$PERF_BIN" /usr/local/bin/perf
