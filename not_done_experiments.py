@@ -2366,7 +2366,21 @@ def gather_tool_versions(ldc2: str, dmd: str, clang: str) -> dict[str, str]:
         "clang": [clang, "--version"],
         "objdump": ["objdump", "--version"],
     }.items():
-        cp = run_cmd(cmd, check=False, timeout=20.0)
+        exe = cmd[0]
+        available = True
+        if "/" in exe:
+            available = Path(exe).exists()
+        else:
+            available = shutil.which(exe) is not None
+        if not available:
+            versions[key] = ""
+            continue
+
+        try:
+            cp = run_cmd(cmd, check=False, timeout=20.0)
+        except FileNotFoundError:
+            versions[key] = ""
+            continue
         text = (cp.stdout or cp.stderr).strip().splitlines()
         versions[key] = text[0] if text else ""
 
@@ -2517,6 +2531,11 @@ def main() -> int:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    selected_tasks = resolve_selected_tasks(args)
+    if not selected_tasks:
+        print("No tasks selected", file=sys.stderr)
+        return 2
+
     ldc2 = str(Path(args.ldc2).expanduser().resolve())
     dmd = str(Path(args.dmd).expanduser().resolve())
     rdmd_bin = Path(args.rdmd_bin).expanduser().resolve()
@@ -2525,25 +2544,30 @@ def main() -> int:
     dmd_repo = Path(args.dmd_repo).expanduser().resolve()
     benchmark_file = Path(args.benchmark).expanduser().resolve()
 
-    if not Path(ldc2).exists():
+    tasks_need_ldc2 = {"zero_cost", "linker_strip", "allocator_compare", "c_vs_d_asm", "large_char_array"}
+    tasks_need_dmd = {"non_zero_init_structs", "ast_field_order", "parser_parallel", "parser_incompiler_parallel", "dmd_profile_compare", "compiler_fuzz"}
+    tasks_need_clang = {"c_vs_d_asm"}
+    tasks_need_phobos_archive = {"phobos_sections"}
+    tasks_need_benchmark = {"ast_field_order"}
+    tasks_need_rdmd = {"ast_field_order"}
+
+    if any(task in tasks_need_ldc2 for task in selected_tasks) and not Path(ldc2).exists():
         print(f"ldc2 not found: {ldc2}", file=sys.stderr)
         return 2
-    if not Path(dmd).exists():
+    if any(task in tasks_need_dmd for task in selected_tasks) and not Path(dmd).exists():
         print(f"dmd not found: {dmd}", file=sys.stderr)
         return 2
-    if shutil.which(clang) is None:
+    if any(task in tasks_need_clang for task in selected_tasks) and shutil.which(clang) is None:
         print(f"clang not found: {clang}", file=sys.stderr)
         return 2
-    if not phobos_archive.exists():
+    if any(task in tasks_need_phobos_archive for task in selected_tasks) and not phobos_archive.exists():
         print(f"phobos archive not found: {phobos_archive}", file=sys.stderr)
         return 2
-    if not benchmark_file.exists():
+    if any(task in tasks_need_benchmark for task in selected_tasks) and not benchmark_file.exists():
         print(f"benchmark file not found: {benchmark_file}", file=sys.stderr)
         return 2
-
-    selected_tasks = resolve_selected_tasks(args)
-    if not selected_tasks:
-        print("No tasks selected", file=sys.stderr)
+    if any(task in tasks_need_rdmd for task in selected_tasks) and not rdmd_bin.exists():
+        print(f"rdmd not found: {rdmd_bin}", file=sys.stderr)
         return 2
 
     manifest: dict[str, object] = {
