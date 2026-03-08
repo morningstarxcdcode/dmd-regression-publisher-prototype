@@ -1,6 +1,9 @@
 name: Linux Gap Close
 
 on:
+  push:
+    branches:
+      - master
   workflow_dispatch:
 
 jobs:
