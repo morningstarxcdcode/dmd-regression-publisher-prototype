@@ -35,21 +35,24 @@ jobs:
 
           sudo apt-get update
           sudo apt-get install -y linux-tools-common || true
-          sudo apt-get install -y linux-perf || true
           sudo apt-get install -y "linux-tools-$(uname -r)" || true
           sudo apt-get install -y "linux-cloud-tools-$(uname -r)" || true
-          sudo apt-get install -y linux-tools-azure || true
-          sudo apt-get install -y linux-cloud-tools-azure || true
-          sudo apt-get install -y linux-tools-generic || true
 
-          if ! command -v perf >/dev/null 2>&1; then
+          PERF_BIN=""
+          if [ -x "/usr/lib/linux-tools/$(uname -r)/perf" ]; then
+            PERF_BIN="/usr/lib/linux-tools/$(uname -r)/perf"
+          else
+            PERF_BIN="$(find /usr/lib/linux-tools -type f -path "*/$(uname -r)/perf" 2>/dev/null | sort | tail -n 1 || true)"
+          fi
+          if [ -z "$PERF_BIN" ]; then
             PERF_BIN="$(find /usr/lib/linux-tools -type f -name perf 2>/dev/null | sort | tail -n 1 || true)"
-            if [ -n "$PERF_BIN" ]; then
-              sudo ln -sf "$PERF_BIN" /usr/local/bin/perf
-            fi
+          fi
+          if [ -n "$PERF_BIN" ]; then
+            sudo ln -sf "$PERF_BIN" /usr/local/bin/perf
           fi
 
           command -v perf
+          ls -l "$(command -v perf)"
           perf --version
 
       - name: Setup Python venv
