@@ -39,13 +39,15 @@ jobs:
           sudo apt-get install -y "linux-cloud-tools-$(uname -r)" || true
 
           PERF_BIN=""
-          if [ -x "/usr/lib/linux-tools/$(uname -r)/perf" ]; then
+          if [ -x "/usr/lib/linux-tools-$(uname -r)/perf" ]; then
+            PERF_BIN="/usr/lib/linux-tools-$(uname -r)/perf"
+          elif [ -x "/usr/lib/linux-tools/$(uname -r)/perf" ]; then
             PERF_BIN="/usr/lib/linux-tools/$(uname -r)/perf"
           else
-            PERF_BIN="$(find /usr/lib/linux-tools -type f -path "*/$(uname -r)/perf" 2>/dev/null | sort | tail -n 1 || true)"
+            PERF_BIN="$(find /usr/lib -type f \( -path "/usr/lib/linux-tools-*/perf" -o -path "/usr/lib/linux-tools/*/perf" \) 2>/dev/null | sort | grep "/$(uname -r)/perf\\|linux-tools-$(uname -r)/perf" | tail -n 1 || true)"
           fi
           if [ -z "$PERF_BIN" ]; then
-            PERF_BIN="$(find /usr/lib/linux-tools -type f -name perf 2>/dev/null | sort | tail -n 1 || true)"
+            PERF_BIN="$(find /usr/lib -type f \( -path "/usr/lib/linux-tools-*/perf" -o -path "/usr/lib/linux-tools/*/perf" \) 2>/dev/null | sort | tail -n 1 || true)"
           fi
           if [ -n "$PERF_BIN" ]; then
             sudo ln -sf "$PERF_BIN" /usr/local/bin/perf
