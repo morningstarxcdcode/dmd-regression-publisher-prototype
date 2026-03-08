@@ -34,9 +34,11 @@ jobs:
           fi
 
           sudo apt-get update
-          sudo apt-get install -y linux-tools-common linux-tools-generic || true
+          sudo apt-get install -y linux-tools-common || true
+          sudo apt-get install -y linux-perf || true
           sudo apt-get install -y "linux-tools-$(uname -r)" || true
           sudo apt-get install -y linux-tools-azure || true
+          sudo apt-get install -y linux-tools-generic || true
 
           if ! command -v perf >/dev/null 2>&1; then
             PERF_BIN="$(find /usr/lib/linux-tools -type f -name perf 2>/dev/null | sort | tail -n 1 || true)"
@@ -45,6 +47,7 @@ jobs:
             fi
           fi
 
+          command -v perf
           perf --version
 
       - name: Setup Python venv
