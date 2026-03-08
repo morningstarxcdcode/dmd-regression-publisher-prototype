@@ -75,7 +75,7 @@ make -C "$DMD_REPO" dmd \
     HOST_DMD="$HOST_DMD" \
     HOST_DFLAGS="$HOST_DFLAGS" \
     BUILD="$BUILD_MODE" \
-    -j2
+    -j2 >&2
 
 BIN_PATH="$DMD_REPO/generated/$HOST_GENERATED_DIR/$BUILD_MODE/64/dmd"
 if [[ ! -x "$BIN_PATH" ]]; then

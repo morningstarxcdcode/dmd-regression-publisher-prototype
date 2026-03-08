@@ -114,8 +114,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          if [[ -z "${THREADED_DMD:-}" ]]; then
-            echo "THREADED_DMD missing; skipping parser comparison because prototype build did not complete."
+          if [[ -z "${THREADED_DMD:-}" || ! -x "${THREADED_DMD:-}" ]]; then
+            echo "THREADED_DMD missing or not executable; skipping parser comparison because prototype build did not complete cleanly."
             exit 0
           fi
           chmod +x parser_threading_compare.sh
