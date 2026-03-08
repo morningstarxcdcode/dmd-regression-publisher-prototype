@@ -28,7 +28,7 @@ jobs:
           sudo sysctl -w kernel.perf_event_paranoid=-1 || true
           sudo sysctl -w kernel.kptr_restrict=0 || true
 
-          if command -v perf >/dev/null 2>&1; then
+          if command -v perf >/dev/null 2>&1 && perf --version >/dev/null 2>&1; then
             perf --version
             exit 0
           fi
@@ -37,7 +37,9 @@ jobs:
           sudo apt-get install -y linux-tools-common || true
           sudo apt-get install -y linux-perf || true
           sudo apt-get install -y "linux-tools-$(uname -r)" || true
+          sudo apt-get install -y "linux-cloud-tools-$(uname -r)" || true
           sudo apt-get install -y linux-tools-azure || true
+          sudo apt-get install -y linux-cloud-tools-azure || true
           sudo apt-get install -y linux-tools-generic || true
 
           if ! command -v perf >/dev/null 2>&1; then
