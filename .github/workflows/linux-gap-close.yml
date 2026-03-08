@@ -22,8 +22,22 @@ jobs:
 
       - name: Install Linux perf
         run: |
+          if command -v perf >/dev/null 2>&1; then
+            perf --version
+            exit 0
+          fi
+
           sudo apt-get update
-          sudo apt-get install -y linux-perf
+          sudo apt-get install -y "linux-tools-$(uname -r)" linux-tools-common || \
+            sudo apt-get install -y linux-tools-common linux-tools-generic
+
+          if ! command -v perf >/dev/null 2>&1; then
+            PERF_BIN="$(find /usr/lib/linux-tools -type f -name perf | sort | tail -n 1)"
+            if [ -n "$PERF_BIN" ]; then
+              sudo ln -sf "$PERF_BIN" /usr/local/bin/perf
+            fi
+          fi
+
           perf --version
 
       - name: Setup Python venv
