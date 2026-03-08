@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-$SCRIPT_DIR/.venv/bin/python}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-$SCRIPT_DIR/artifacts/linux_gap_close}"
 DMD_BIN="${DMD_BIN:-$SCRIPT_DIR/.locald/dmd-nightly/linux/bin64/dmd}"
+PROFILE_DMD_BIN="${PROFILE_DMD_BIN:-$DMD_BIN}"
+PARSER_DMD_BIN="${PARSER_DMD_BIN:-$DMD_BIN}"
 LDC2_BIN="${LDC2_BIN:-$SCRIPT_DIR/.locald/ldc-1.42.0/bin/ldc2}"
 CLANG_BIN="${CLANG_BIN:-clang}"
 PARSER_THREADS="${PARSER_THREADS:-1,2,4,8}"
@@ -23,7 +25,9 @@ Runs Linux-focused closure for remaining "partial" items:
 Options:
   --python-bin <path>      Python executable (default: .venv/bin/python)
   --artifact-root <path>   Output root (default: artifacts/linux_gap_close)
-  --dmd-bin <path>         DMD binary for not_done_experiments profile/parser tasks
+  --dmd-bin <path>         Legacy default DMD binary for both profile/parser tasks
+  --profile-dmd-bin <path> DMD binary for dmd_profile_compare
+  --parser-dmd-bin <path>  DMD binary for parser_incompiler_parallel
   --ldc2-bin <path>        LDC2 binary path
   --clang-bin <path>       Clang binary path
   --parser-threads <csv>   Parser in-compiler thread counts (default: 1,2,4,8)
@@ -41,7 +45,14 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --python-bin) PYTHON_BIN="$2"; shift 2 ;;
         --artifact-root) ARTIFACT_ROOT="$2"; shift 2 ;;
-        --dmd-bin) DMD_BIN="$2"; shift 2 ;;
+        --dmd-bin)
+            DMD_BIN="$2"
+            PROFILE_DMD_BIN="$2"
+            PARSER_DMD_BIN="$2"
+            shift 2
+            ;;
+        --profile-dmd-bin) PROFILE_DMD_BIN="$2"; shift 2 ;;
+        --parser-dmd-bin) PARSER_DMD_BIN="$2"; shift 2 ;;
         --ldc2-bin) LDC2_BIN="$2"; shift 2 ;;
         --clang-bin) CLANG_BIN="$2"; shift 2 ;;
         --parser-threads) PARSER_THREADS="$2"; shift 2 ;;
@@ -63,6 +74,16 @@ fi
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
     echo "Python binary not executable: $PYTHON_BIN" >&2
+    exit 2
+fi
+
+if [[ ! -x "$PROFILE_DMD_BIN" ]]; then
+    echo "Profile DMD binary not executable: $PROFILE_DMD_BIN" >&2
+    exit 2
+fi
+
+if [[ ! -x "$PARSER_DMD_BIN" ]]; then
+    echo "Parser DMD binary not executable: $PARSER_DMD_BIN" >&2
     exit 2
 fi
 
@@ -90,15 +111,62 @@ log "Step 2/4: Analyze release sweep"
 
 log "Step 3/4: Linux not_done subset (dmd profile + in-compiler parser threading)"
 "$PYTHON_BIN" "$SCRIPT_DIR/not_done_experiments.py" \
-    --out-dir "$NOT_DONE_DIR" \
-    --tasks dmd_profile_compare,parser_incompiler_parallel \
-    --dmd "$DMD_BIN" \
+    --out-dir "$NOT_DONE_DIR/profile" \
+    --tasks dmd_profile_compare \
+    --dmd "$PROFILE_DMD_BIN" \
+    --ldc2 "$LDC2_BIN" \
+    --clang "$CLANG_BIN" \
+    --task-timeout 900
+
+"$PYTHON_BIN" "$SCRIPT_DIR/not_done_experiments.py" \
+    --out-dir "$NOT_DONE_DIR/parser" \
+    --tasks parser_incompiler_parallel \
+    --dmd "$PARSER_DMD_BIN" \
     --ldc2 "$LDC2_BIN" \
     --clang "$CLANG_BIN" \
     --parser-threads "$PARSER_THREADS" \
     --parser-repeats "$PARSER_REPEATS" \
     --parser-file-count "$PARSER_FILE_COUNT" \
     --task-timeout 900
+
+"$PYTHON_BIN" - "$NOT_DONE_DIR/profile/status.csv" "$NOT_DONE_DIR/parser/status.csv" "$NOT_DONE_DIR/status.csv" "$NOT_DONE_DIR/status.md" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+profile_csv = Path(sys.argv[1])
+parser_csv = Path(sys.argv[2])
+out_csv = Path(sys.argv[3])
+out_md = Path(sys.argv[4])
+
+rows = []
+fieldnames = set()
+for path in (profile_csv, parser_csv):
+    if not path.exists():
+        continue
+    with path.open("r", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            rows.append(row)
+            fieldnames.update(row.keys())
+
+ordered = ["task", "status", "task_key"] + sorted(k for k in fieldnames if k not in {"task", "status", "task_key"})
+with out_csv.open("w", newline="", encoding="utf-8") as handle:
+    writer = csv.DictWriter(handle, fieldnames=ordered)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({key: row.get(key, "") for key in ordered})
+
+lines = [
+    "# Linux not_done status",
+    "",
+    "| Task | Status | Task Key |",
+    "|---|---|---|",
+]
+for row in rows:
+    lines.append(f"| {row.get('task', '')} | {row.get('status', '')} | {row.get('task_key', '')} |")
+out_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
 
 log "Step 4/4: Build summary"
 "$PYTHON_BIN" - "$RELEASE_DIR" "$NOT_DONE_DIR" "$SUMMARY_FILE" <<'PY'
@@ -114,7 +182,7 @@ summary_file = Path(sys.argv[3])
 latest_csv = release_dir / "latest20" / "results_raw.csv"
 compat_csv = release_dir / "compatible20" / "results_raw.csv"
 status_csv = not_done_dir / "status.csv"
-parser_speedup_csv = not_done_dir / "parser_incompiler_parallel" / "speedup.csv"
+parser_speedup_csv = not_done_dir / "parser" / "parser_incompiler_parallel" / "speedup.csv"
 
 def count_ok_fail(path: Path):
     ok = fail = 0

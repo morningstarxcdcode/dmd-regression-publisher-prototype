@@ -107,7 +107,8 @@ jobs:
           chmod +x linux_gap_close.sh
           ./linux_gap_close.sh \
             --python-bin ./.venv/bin/python \
-            --dmd-bin "$THREADED_DMD"
+            --profile-dmd-bin ./.locald/dmd-nightly/linux/bin64/dmd \
+            --parser-dmd-bin "$THREADED_DMD"
 
       - name: Run Linux parser comparison
         if: always()
