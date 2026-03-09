@@ -2,6 +2,16 @@
 
 Generated: 2026-03-08
 
+## 0) The methodology gap Dennis flagged is now explicit
+
+- Evidence:
+  - `artifacts/report.md`
+  - `submission/dennis_reply_draft.md`
+- Result:
+  - the generated report now states the benchmark file, compile command, run policy, and machine.
+  - the Dennis reply draft answers exactly what `compile time` means and separates the nightly `-ftime-trace` build from the historical release sweep.
+- Why it matters: this removes the biggest ambiguity in the original email and makes the chart interpretable without extra context.
+
 ## 1) Switch scaling is strongly non-linear at higher case counts
 
 - Evidence: `artifacts/upgrades/switch_scaling_v2/report.md`
@@ -66,3 +76,14 @@ Generated: 2026-03-08
   - GC, associative arrays, and float-to-string now have reproducible kernel benchmarks in the repo.
   - `dub` PGO is also implemented, but current local execution is blocked by DNS/network access to `github.com`.
 - Why it matters: this closes most of the broader-gist implementation gap with concrete, rerunnable tasks instead of narrative-only intent.
+
+## 9) The `2.096.0 -> 2.096.1` slowdown window is now narrowed to a small compiler/CTFE candidate set
+
+- Evidence:
+  - `submission/release_spike_attribution.md`
+  - `https://dlang.org/changelog/2.096.1.html`
+  - `https://github.com/dlang/dmd/compare/v2.096.0...v2.096.1.patch`
+- Result:
+  - the current tracked rerun shows `+6.780%` for `2.096.0 -> 2.096.1` on the compatible track.
+  - the release window is narrowed to 21 commits, with the most plausible candidates concentrated in CTFE, overload resolution, and semantic-analysis related fixes.
+- Why it matters: this moves the spike discussion from “maybe something changed around 2.096.1” to a small, evidence-backed candidate commit set.

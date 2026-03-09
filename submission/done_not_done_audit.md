@@ -8,6 +8,8 @@
 - GSoC competitiveness extras (community-visible engagement, upstream contributions): **partially done**
 - Parser in-compiler threading prototype: **advanced but still performance-partial**
 - Cross-platform validation (Linux `perf`, Linux latest20 non-crash timings): **hosted Linux evidence exists; strict `perf` still self-hosted only**
+- Methodology labeling for compile-time plots/reports: **done**
+- Release-window spike attribution note: **started with changelog + commit-window evidence**
 
 ## Detailed Matrix
 
@@ -31,6 +33,9 @@
 | Compiler fuzzing | done | `artifacts/not_done/compiler_fuzz/results.csv` | 1000 compile errors, 0 crashes |
 | `char[] > 4GB` truncation probe | done | `artifacts/not_done/large_char_array_4gb/run_stdout.txt` | Probe reported `ok=1` |
 | Switch scaling benchmark | done + upgraded | `artifacts/upgrades/switch_scaling_v2/report.md` | Upgraded points: 100,300,1000,3000,10000 |
+| Methodology note in generated report | done | `artifacts/report.md` | Report now defines benchmark, compile command, run policy, and machine |
+| Dennis reply draft with clarified methodology | done | `submission/dennis_reply_draft.md` | Ready to send/edit |
+| Release-window spike attribution note | partial | `submission/release_spike_attribution.md` | Official changelog + actual `v2.096.0...v2.096.1` commit window captured; full bisect still follow-up |
 | Specific mentor questions | done | `submission/mentor_packet.md` | Questions are explicit and reviewable |
 | AI usage disclosure | done | `submission/ai_usage_disclosure.md` | Concise disclosure exists |
 | Public community engagement links (issue/PR/forum) | partial | `submission/community_activity.md` | Tracker created; links still to be populated |

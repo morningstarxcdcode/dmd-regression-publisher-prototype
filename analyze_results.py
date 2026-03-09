@@ -7,6 +7,7 @@ import math
 import os
 import random
 import statistics
+import textwrap
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -53,6 +54,27 @@ class TrackResult:
     regressions: List[Dict[str, object]]
     failure_counts: Dict[str, int]
     total_rows: int
+    methodology: "Methodology"
+
+
+@dataclass
+class Methodology:
+    benchmark_label: str
+    benchmark_description: str
+    compile_command: str
+    measured_runs: int
+    warmup_runs: int
+    hostname: str
+    cpu_brand: str
+    os_value: str
+    trace_compiler_label: str
+
+    def short_plot_note(self) -> str:
+        return (
+            f"{self.benchmark_label} | {self.compile_command} | "
+            f"median of {self.measured_runs} measured runs after {self.warmup_runs} warmups | "
+            f"{self.cpu_brand} | {self.os_value}"
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,6 +90,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--granularity-csv", default="artifacts/trace_granularity_sweep.csv", help="Optional trace granularity CSV")
     parser.add_argument("--bootstrap-samples", type=int, default=2000, help="Bootstrap resamples for CI")
     parser.add_argument("--regression-threshold", type=float, default=10.0, help="Percent threshold for regression flags")
+    parser.add_argument("--benchmark-label", default="benchmark.d", help="Benchmark source label used in the plots/report")
+    parser.add_argument(
+        "--benchmark-description",
+        default="synthetic template/CTFE-heavy D source",
+        help="Short benchmark description for methodology text",
+    )
+    parser.add_argument(
+        "--compile-command",
+        default="dmd benchmark.d -O -c -of=<temp>.o",
+        help="Compile command template used for the release sweep",
+    )
+    parser.add_argument(
+        "--trace-compiler-label",
+        default="nightly DMD build",
+        help="Label for the compiler used for separate -ftime-trace collection",
+    )
     return parser.parse_args()
 
 
@@ -283,7 +321,45 @@ def regression_scan(summary: Sequence[VersionStats], threshold: float) -> List[D
     return rows
 
 
-def plot_compile(summary: Sequence[VersionStats], regression_rows: Sequence[Dict[str, object]], out_path: Path, title: str) -> None:
+def most_common_field(rows: Sequence[Dict[str, str]], key: str, fallback: str) -> str:
+    values = [row.get(key, "").strip() for row in rows if row.get(key, "").strip()]
+    if not values:
+        return fallback
+    return Counter(values).most_common(1)[0][0]
+
+
+def infer_methodology(rows: Sequence[Dict[str, str]], args: argparse.Namespace) -> Methodology:
+    version_counts: Dict[str, Counter[str]] = defaultdict(Counter)
+    for row in rows:
+        version = row.get("version", "").strip()
+        if not version:
+            continue
+        version_counts[version][row.get("is_warmup", "0")] += 1
+
+    sample_counts = next(iter(version_counts.values()), Counter())
+    measured_runs = int(sample_counts.get("0", 0))
+    warmup_runs = int(sample_counts.get("1", 0))
+
+    return Methodology(
+        benchmark_label=args.benchmark_label,
+        benchmark_description=args.benchmark_description,
+        compile_command=args.compile_command,
+        measured_runs=measured_runs,
+        warmup_runs=warmup_runs,
+        hostname=most_common_field(rows, "hostname", "unknown-host"),
+        cpu_brand=most_common_field(rows, "cpu_brand", "unknown-cpu"),
+        os_value=most_common_field(rows, "os", "unknown-os"),
+        trace_compiler_label=args.trace_compiler_label,
+    )
+
+
+def plot_compile(
+    summary: Sequence[VersionStats],
+    regression_rows: Sequence[Dict[str, object]],
+    out_path: Path,
+    title: str,
+    methodology: Methodology,
+) -> None:
     if not HAS_MATPLOTLIB:
         return
 
@@ -293,7 +369,7 @@ def plot_compile(summary: Sequence[VersionStats], regression_rows: Sequence[Dict
     highs = [s.ci_high_ms if s.ci_high_ms is not None else s.median_ms for s in summary]
     x = list(range(len(summary)))
 
-    fig, ax = plt.subplots(figsize=(13, 5.8))
+    fig, ax = plt.subplots(figsize=(13, 6.4))
     ax.plot(x, medians, color="#005f73", marker="o", linewidth=2, label="Median compile time")
 
     if all(v is not None for v in lows) and all(v is not None for v in highs):
@@ -310,19 +386,27 @@ def plot_compile(summary: Sequence[VersionStats], regression_rows: Sequence[Dict
             ax.scatter(idx, stat.median_ms, color="#bb3e03", s=90, zorder=3)
 
     ax.set_title(title)
-    ax.set_ylabel("Compile time (ms)")
+    ax.set_ylabel("Compile wall time (ms)")
     ax.set_xlabel("DMD version")
     ax.set_xticks(x)
     ax.set_xticklabels(versions, rotation=45, ha="right")
     ax.grid(alpha=0.25)
     ax.legend(loc="upper left")
-    fig.tight_layout()
+    fig.subplots_adjust(bottom=0.24)
+    fig.text(
+        0.01,
+        0.01,
+        textwrap.fill(methodology.short_plot_note(), width=120),
+        ha="left",
+        va="bottom",
+        fontsize=8,
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=160)
     plt.close(fig)
 
 
-def plot_artifact_size(summary: Sequence[VersionStats], out_path: Path, title: str) -> None:
+def plot_artifact_size(summary: Sequence[VersionStats], out_path: Path, title: str, methodology: Methodology) -> None:
     if not HAS_MATPLOTLIB:
         return
 
@@ -333,15 +417,23 @@ def plot_artifact_size(summary: Sequence[VersionStats], out_path: Path, title: s
     ]
     x = list(range(len(summary)))
 
-    fig, ax = plt.subplots(figsize=(13, 4.8))
+    fig, ax = plt.subplots(figsize=(13, 5.4))
     ax.bar(x, sizes_kb, color="#0a9396", alpha=0.85)
     ax.set_title(title)
-    ax.set_ylabel("Object size (KB)")
+    ax.set_ylabel("Compile-only object size (KB)")
     ax.set_xlabel("DMD version")
     ax.set_xticks(x)
     ax.set_xticklabels(versions, rotation=45, ha="right")
     ax.grid(axis="y", alpha=0.25)
-    fig.tight_layout()
+    fig.subplots_adjust(bottom=0.24)
+    fig.text(
+        0.01,
+        0.01,
+        textwrap.fill(methodology.short_plot_note(), width=120),
+        ha="left",
+        va="bottom",
+        fontsize=8,
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=160)
     plt.close(fig)
@@ -373,6 +465,29 @@ def build_report(
         total_runs = sum(s.n_runs for s in result.summary)
         total_failures = sum(s.n_fail for s in result.summary)
         lines.append(f"- **{track_name}**: versions={len(result.summary)} runs={total_runs} failures={total_failures}")
+
+    lines.append("")
+    lines.append("## Data Collection Methodology")
+    lines.append("")
+    methodology = next(iter(track_results.values())).methodology
+    lines.append(
+        f"- Benchmark: `{methodology.benchmark_label}` ({methodology.benchmark_description})."
+    )
+    lines.append(
+        f"- Release-sweep command: `{methodology.compile_command}`."
+    )
+    lines.append(
+        "- Plotted `compile time` means wall-clock time for the compile-only command above; linking is excluded."
+    )
+    lines.append(
+        f"- Sampling policy: {methodology.warmup_runs} warmups + {methodology.measured_runs} measured runs per release; plot and CSV use the median of measured runs."
+    )
+    lines.append(
+        f"- Machine: `{methodology.hostname}` / `{methodology.cpu_brand}` / `{methodology.os_value}`."
+    )
+    lines.append(
+        f"- Phase attribution (`-ftime-trace`) was collected separately with `{methodology.trace_compiler_label}`, not with each historical release binary."
+    )
 
     lines.append("")
     lines.append("## Track Comparison")
@@ -475,6 +590,7 @@ def build_report(
 def analyze_track(track: str, rows: Sequence[Dict[str, str]], args: argparse.Namespace, out_root: Path, multi_track: bool) -> TrackResult:
     summary, failure_counts = summarize_versions(rows, bootstrap_samples=args.bootstrap_samples)
     regressions = regression_scan(summary, threshold=args.regression_threshold)
+    methodology = infer_methodology(rows, args)
 
     out_dir = out_root / track if multi_track else out_root
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -530,8 +646,19 @@ def analyze_track(track: str, rows: Sequence[Dict[str, str]], args: argparse.Nam
         ],
     )
 
-    plot_compile(summary, regressions, out_dir / "compile_time_trend.png", f"DMD Compile Time ({track})")
-    plot_artifact_size(summary, out_dir / "artifact_size_trend.png", f"DMD Object Size ({track})")
+    plot_compile(
+        summary,
+        regressions,
+        out_dir / "compile_time_trend.png",
+        f"DMD Compile Wall Time for {methodology.benchmark_label} ({track})",
+        methodology,
+    )
+    plot_artifact_size(
+        summary,
+        out_dir / "artifact_size_trend.png",
+        f"DMD Compile-Only Object Size for {methodology.benchmark_label} ({track})",
+        methodology,
+    )
 
     return TrackResult(
         track=track,
@@ -539,6 +666,7 @@ def analyze_track(track: str, rows: Sequence[Dict[str, str]], args: argparse.Nam
         regressions=regressions,
         failure_counts=failure_counts,
         total_rows=len(rows),
+        methodology=methodology,
     )
 
 
