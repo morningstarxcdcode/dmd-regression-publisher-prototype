@@ -1,5 +1,8 @@
 name: Linux Gap Close Strict
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
 
@@ -10,13 +13,16 @@ jobs:
       - linux
       - x64
     timeout-minutes: 180
+    env:
+      PARSER_DMD_REPO_URL: https://github.com/dlang/dmd
+      PARSER_DMD_REF: 4faeee39cf33c1e3491b7e1da83a71111f05606f
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -90,12 +96,33 @@ jobs:
           curl -fsSL https://dlang.org/install.sh | bash -s -- -p ./.locald install dmd-nightly
           ./.locald/dmd-nightly/linux/bin64/dmd --version
 
-      - name: Checkout DMD source for parser prototype
+      - name: Prepare artifact directories
         shell: bash
         run: |
           set -euxo pipefail
-          git clone --depth 1 --recurse-submodules https://github.com/dlang/dmd external/dmd
-          git -C external/dmd apply "$GITHUB_WORKSPACE/patches/external_dmd_parser_parallel_prototype.patch"
+          mkdir -p artifacts/linux_gap_close artifacts/strict_perf_probe
+
+      - name: Bootstrap release archive cache
+        shell: bash
+        run: |
+          set -euxo pipefail
+          chmod +x bootstrap_external_cache.sh
+          ./bootstrap_external_cache.sh \
+            --track both \
+            --cache-dir .cache/dmd-releases-linux \
+            --skip-dub
+
+      - name: Prepare pinned DMD source for parser prototype
+        shell: bash
+        run: |
+          set -euxo pipefail
+          chmod +x prepare_parser_prototype_dmd.sh
+          ./prepare_parser_prototype_dmd.sh \
+            --repo-url "$PARSER_DMD_REPO_URL" \
+            --repo-dir external/dmd \
+            --ref "$PARSER_DMD_REF" \
+            --patch "$GITHUB_WORKSPACE/patches/external_dmd_parser_parallel_prototype.patch"
+          git -C external/dmd rev-parse HEAD
 
       - name: Build parser prototype DMD
         shell: bash
@@ -140,9 +167,10 @@ jobs:
 
       - name: Upload strict Linux gap-close artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-gap-close-strict-artifacts
           path: |
             artifacts/linux_gap_close/
             artifacts/strict_perf_probe/
+          if-no-files-found: error

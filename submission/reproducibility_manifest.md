@@ -185,6 +185,8 @@ Outputs:
   --out-dir artifacts/upgrades/parser_thread_compare_final
 ```
 
+`build_parser_threaded_dmd.sh` now auto-prepares `external/dmd` at pinned upstream commit `4faeee39cf33c1e3491b7e1da83a71111f05606f` and then applies `patches/external_dmd_parser_parallel_prototype.patch`, so the prototype source base is reproducible instead of tracking moving upstream `master`.
+
 Outputs:
 
 - `artifacts/upgrades/parser_thread_compare_final/comparison.csv`

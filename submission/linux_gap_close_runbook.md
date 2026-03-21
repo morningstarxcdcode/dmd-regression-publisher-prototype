@@ -54,12 +54,14 @@ Outputs:
 - Purpose: hosted validation on GitHub-hosted Linux
 - Gate-B behavior: records a delegated strict-artifact pass when hosted Ubuntu does not provide a usable kernel-matched `perf`
 - Uploaded bundle: `linux-hosted-validation-artifacts`
+- Parser prototype source: pinned to upstream `dlang/dmd` commit `4faeee39cf33c1e3491b7e1da83a71111f05606f`, then patched with `patches/external_dmd_parser_parallel_prototype.patch`
 
 ## Strict CI Option
 
 - Workflow: `.github/workflows/linux-gap-close-strict.yml`
 - Intended environment: self-hosted Linux runner with real `perf`
 - Use this workflow when claiming full Linux `dmd -profile` vs `perf` closure
+- Runner note: Node 24-capable action majors require Actions Runner `v2.327.1` or newer
 
 ## What The Strict Path Covers
 
@@ -84,6 +86,8 @@ If you are using the prototype in this repo, build the candidate binary first:
 ```bash
 ./build_parser_threaded_dmd.sh --host-dmd ./.locald/dmd-nightly/osx/bin/dmd
 ```
+
+The build helper above auto-prepares `external/dmd` at pinned upstream commit `4faeee39cf33c1e3491b7e1da83a71111f05606f` and then applies `patches/external_dmd_parser_parallel_prototype.patch`.
 
 ```bash
 ./parser_threading_compare.sh \

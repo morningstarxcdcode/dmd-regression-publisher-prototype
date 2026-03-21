@@ -332,7 +332,7 @@ Benchmark-suite selection for release sweeps is available through `--bench-suite
 - Compile benchmarking uses `-c` mode so the metric focuses on compiler work instead of linker noise.
 - Artifact size is compile-output object size, not final linked executable size.
 - Regression flags remain intentionally conservative: percentage jump plus non-overlapping confidence intervals.
-- The local `external/dmd` checkout is not part of the Git snapshot; the parser-prototype frontend change is preserved in `patches/external_dmd_parser_parallel_prototype.patch`.
+- The parser-prototype frontend change is preserved in `patches/external_dmd_parser_parallel_prototype.patch`, and the helper/CI path pins `external/dmd` to upstream commit `4faeee39cf33c1e3491b7e1da83a71111f05606f` before applying it.
 - Linux-only workflows (`strict-perf-probe`, `linux-gap-close`) now return delegated CI pass summaries on non-Linux hosts instead of host-mismatch failures.
 - `latest20` is snapshot-first by default. Normal runs use the pinned `versions_latest20.txt` file and only refresh when you explicitly request `--latest-source refresh` or `make refresh-latest-snapshot`.
 - Release sweeps are cache-first by default. Normal runs use the local archive cache and only download archives during explicit bootstrap flows such as `make bootstrap-external-cache`.

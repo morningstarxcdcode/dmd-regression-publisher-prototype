@@ -22,12 +22,16 @@ DMD_REPO="${DMD_REPO:-$SCRIPT_DIR/external/dmd}"
 HOST_DMD="${HOST_DMD:-$SCRIPT_DIR/.locald/dmd-nightly/$HOST_GENERATED_DIR/$HOST_DMD_BIN_SUBDIR/dmd}"
 BUILD_MODE="${BUILD_MODE:-debug}"
 HOST_DFLAGS="${HOST_DFLAGS:--version=ParserParallelPrototype}"
+PARSER_DMD_REF="${PARSER_DMD_REF:-4faeee39cf33c1e3491b7e1da83a71111f05606f}"
+PARSER_PATCH="${PARSER_PATCH:-$SCRIPT_DIR/patches/external_dmd_parser_parallel_prototype.patch}"
+PARSER_PREPARE_SCRIPT="${PARSER_PREPARE_SCRIPT:-$SCRIPT_DIR/prepare_parser_prototype_dmd.sh}"
 
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [options]
 
 Builds a DMD binary with the ParserParallelPrototype version flag enabled.
+The source checkout is auto-prepared at a pinned upstream DMD commit before build.
 
 Options:
   --dmd-repo <path>       DMD repo root (default: external/dmd)
@@ -69,6 +73,13 @@ fi
 if [[ ! -x "$HOST_DMD" ]]; then
     echo "Host DMD not executable: $HOST_DMD" >&2
     exit 2
+fi
+
+if [[ -x "$PARSER_PREPARE_SCRIPT" ]]; then
+    "$PARSER_PREPARE_SCRIPT" \
+        --repo-dir "$DMD_REPO" \
+        --ref "$PARSER_DMD_REF" \
+        --patch "$PARSER_PATCH" >&2
 fi
 
 make -C "$DMD_REPO" dmd \
