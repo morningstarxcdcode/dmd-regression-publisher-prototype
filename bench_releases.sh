@@ -15,6 +15,12 @@ WARMUPS=2
 TIMEOUT_SEC=120
 TRACK="both" # latest20 | compatible20 | both
 DMD_ARCHIVE_FLAVOR=""
+LATEST_SOURCE="snapshot" # snapshot | refresh | file
+ARCHIVE_SOURCE="cache"   # cache | bootstrap
+RESOLVE_LATEST_ONLY=0
+PREPARE_CACHE_ONLY=0
+LATEST_FILE_EXPLICIT=0
+LATEST_SOURCE_EXPLICIT=0
 
 resolve_extracted_dmd_path() {
     local extract_dir="$1"
@@ -75,7 +81,11 @@ Usage: $(basename "$0") [options]
 Options:
   --track <name>            latest20, compatible20, or both (default: both).
   --versions-file <path>    Compatible-track version list file.
-  --latest-file <path>      Path for auto-generated latest20 version list.
+  --latest-file <path>      Latest-track version list or snapshot file.
+  --latest-source <mode>    snapshot, refresh, or file (default: snapshot).
+  --archive-source <mode>   cache or bootstrap (default: cache).
+  --resolve-latest-only     Refresh or validate the latest-track version file, then exit.
+  --prepare-cache-only      Prepare release archives for the selected track(s), then exit.
   --benchmark <path>        D benchmark source file (default: benchmark.d).
   --runs <n>                Number of measured runs per version (default: 7).
   --warmups <n>             Number of warmup runs per version (default: 2).
@@ -208,7 +218,7 @@ except subprocess.TimeoutExpired:
 PY
 }
 
-resolve_latest_versions() {
+refresh_latest_versions() {
     local output_file="$1"
     local tmp_index
     tmp_index="$(mktemp)"
@@ -221,6 +231,7 @@ resolve_latest_versions() {
     if ! python3 - "$tmp_index" "$output_file" <<'PY'; then
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 index_path = Path(sys.argv[1])
@@ -230,8 +241,16 @@ versions = sorted(set(re.findall(r"2\.\d+\.\d+", text)), key=lambda s: tuple(int
 latest = versions[-20:]
 if len(latest) < 20:
     raise SystemExit("Failed to resolve 20 releases from release index")
+generated = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 out_path.write_text(
-    "# Auto-generated latest 20 DMD releases from downloads.dlang.org\n" + "\n".join(latest) + "\n",
+    "\n".join([
+        "# Pinned latest 20 DMD releases snapshot",
+        f"# Generated: {generated}",
+        "# Source: https://downloads.dlang.org/releases/2.x/",
+        "# Refresh: ./bench_releases.sh --track latest20 --latest-source refresh --resolve-latest-only",
+        *latest,
+        "",
+    ]),
     encoding="utf-8",
 )
 print(f"Resolved latest releases: {latest[0]} .. {latest[-1]}")
@@ -244,6 +263,30 @@ PY
     return 0
 }
 
+ensure_latest_versions_ready() {
+    case "$LATEST_SOURCE" in
+        snapshot|file)
+            if [[ -f "$LATEST_VERSIONS_FILE" ]]; then
+                return 0
+            fi
+            echo "Latest versions file not found: $LATEST_VERSIONS_FILE" >&2
+            echo "Run ./bench_releases.sh --track latest20 --latest-source refresh --resolve-latest-only or make refresh-latest-snapshot" >&2
+            return 1
+            ;;
+        refresh)
+            if ! refresh_latest_versions "$LATEST_VERSIONS_FILE"; then
+                echo "Failed to refresh latest versions snapshot: $LATEST_VERSIONS_FILE" >&2
+                return 1
+            fi
+            return 0
+            ;;
+        *)
+            echo "Invalid --latest-source: $LATEST_SOURCE" >&2
+            return 1
+            ;;
+    esac
+}
+
 load_versions() {
     local versions_file="$1"
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -252,6 +295,56 @@ load_versions() {
         fi
         printf '%s\n' "$line"
     done < "$versions_file"
+}
+
+ensure_archive_cached() {
+    local version="$1"
+    local tarball="$2"
+    local url="$3"
+
+    if [[ -f "$tarball" ]]; then
+        return 0
+    fi
+
+    if [[ "$ARCHIVE_SOURCE" != "bootstrap" ]]; then
+        log "Cache miss for $version: $tarball"
+        log "Populate the cache with ./bootstrap_external_cache.sh or rerun with --archive-source bootstrap"
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$tarball")"
+    if ! curl -fL --retry 3 --retry-delay 2 -o "$tarball" "$url" >/dev/null 2>&1; then
+        log "Download failed for $version"
+        return 2
+    fi
+    return 0
+}
+
+prepare_track_cache() {
+    local track_name="$1"
+    local versions_file="$2"
+    local rc=0
+    local -a versions=()
+    local version tarball url
+
+    while IFS= read -r version || [[ -n "$version" ]]; do
+        versions+=("$version")
+    done < <(load_versions "$versions_file")
+
+    if [[ ${#versions[@]} -eq 0 ]]; then
+        echo "No versions found in $versions_file" >&2
+        return 1
+    fi
+
+    log "[$track_name] Preparing archive cache for ${#versions[@]} versions"
+    for version in "${versions[@]}"; do
+        tarball="$CACHE_DIR/dmd.${version}.${DMD_ARCHIVE_FLAVOR}.tar.xz"
+        url="https://downloads.dlang.org/releases/2.x/${version}/dmd.${version}.${DMD_ARCHIVE_FLAVOR}.tar.xz"
+        if ! ensure_archive_cached "$version" "$tarball" "$url"; then
+            rc=1
+        fi
+    done
+    return "$rc"
 }
 
 run_track() {
@@ -275,9 +368,11 @@ run_track() {
 
     log "[$track_name] Starting sweep across ${#versions[@]} versions"
     log "[$track_name] Measured runs/version: $RUNS | Warmups/version: $WARMUPS | Timeout: ${TIMEOUT_SEC}s"
+    log "[$track_name] Latest source: $LATEST_SOURCE | Archive source: $ARCHIVE_SOURCE"
     log "[$track_name] Output CSV: $out_csv"
 
     local version
+    local env_fail=0
     for version in "${versions[@]}"; do
         log "[$track_name] Preparing DMD $version"
 
@@ -288,15 +383,18 @@ run_track() {
         local dmd_bin=""
         dmd_bin="$(resolve_extracted_dmd_path "$extract_dir" || true)"
         if [[ -z "$dmd_bin" ]]; then
-            mkdir -p "$extract_dir"
-            if [[ ! -f "$tarball" ]]; then
-                if ! curl -fL --retry 3 --retry-delay 2 -o "$tarball" "$url" >/dev/null 2>&1; then
-                    log "[$track_name] Download failed for $version"
-                    local ts
-                    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            local archive_rc=0
+            ensure_archive_cached "$version" "$tarball" "$url" || archive_rc=$?
+            if [[ $archive_rc -ne 0 ]]; then
+                local ts
+                ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                if [[ $archive_rc -eq 1 ]]; then
+                    append_row "$out_csv" "$track_name" "$version" "-1" "0" "0" "-1" "0" "CACHE_MISS" "cache_miss" "release archive cache miss; run bootstrap_external_cache.sh" "$HOSTNAME_VALUE" "$CPU_BRAND" "$OS_VALUE" "$ts"
+                else
                     append_row "$out_csv" "$track_name" "$version" "-1" "0" "0" "-1" "0" "DL_FAIL" "download_fail" "download failed" "$HOSTNAME_VALUE" "$CPU_BRAND" "$OS_VALUE" "$ts"
-                    continue
                 fi
+                env_fail=1
+                continue
             fi
 
             rm -rf "$extract_dir"
@@ -306,6 +404,7 @@ run_track() {
                 local ts
                 ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
                 append_row "$out_csv" "$track_name" "$version" "-1" "0" "0" "-1" "0" "EXTRACT_FAIL" "extract_fail" "archive extraction failed" "$HOSTNAME_VALUE" "$CPU_BRAND" "$OS_VALUE" "$ts"
+                env_fail=1
                 continue
             fi
         fi
@@ -317,6 +416,7 @@ run_track() {
             local ts
             ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             append_row "$out_csv" "$track_name" "$version" "-1" "0" "0" "-1" "0" "BIN_NOT_FOUND" "binary_not_found" "unable to locate dmd executable" "$HOSTNAME_VALUE" "$CPU_BRAND" "$OS_VALUE" "$ts"
+            env_fail=1
             continue
         fi
 
@@ -388,6 +488,7 @@ DATA
     done
 
     log "[$track_name] Sweep complete. Raw measurements: $out_csv"
+    return "$env_fail"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -402,7 +503,25 @@ while [[ $# -gt 0 ]]; do
             ;;
         --latest-file)
             LATEST_VERSIONS_FILE="$2"
+            LATEST_FILE_EXPLICIT=1
             shift 2
+            ;;
+        --latest-source)
+            LATEST_SOURCE="$2"
+            LATEST_SOURCE_EXPLICIT=1
+            shift 2
+            ;;
+        --archive-source)
+            ARCHIVE_SOURCE="$2"
+            shift 2
+            ;;
+        --resolve-latest-only)
+            RESOLVE_LATEST_ONLY=1
+            shift
+            ;;
+        --prepare-cache-only)
+            PREPARE_CACHE_ONLY=1
+            shift
             ;;
         --benchmark)
             BENCHMARK_FILE="$2"
@@ -449,7 +568,21 @@ if [[ "$TRACK" != "latest20" && "$TRACK" != "compatible20" && "$TRACK" != "both"
     exit 1
 fi
 
-if [[ ! -f "$BENCHMARK_FILE" ]]; then
+if [[ "$LATEST_SOURCE" != "snapshot" && "$LATEST_SOURCE" != "refresh" && "$LATEST_SOURCE" != "file" ]]; then
+    echo "--latest-source must be one of: snapshot, refresh, file" >&2
+    exit 1
+fi
+
+if [[ "$ARCHIVE_SOURCE" != "cache" && "$ARCHIVE_SOURCE" != "bootstrap" ]]; then
+    echo "--archive-source must be one of: cache, bootstrap" >&2
+    exit 1
+fi
+
+if [[ $LATEST_FILE_EXPLICIT -eq 1 && $LATEST_SOURCE_EXPLICIT -eq 0 ]]; then
+    LATEST_SOURCE="file"
+fi
+
+if [[ ! -f "$BENCHMARK_FILE" && $PREPARE_CACHE_ONLY -eq 0 && $RESOLVE_LATEST_ONLY -eq 0 ]]; then
     echo "Benchmark file not found: $BENCHMARK_FILE" >&2
     exit 1
 fi
@@ -483,28 +616,46 @@ CPU_BRAND="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || lscpu 2>/dev/null
 OS_VALUE="$(uname -srm 2>/dev/null || echo unknown-os)"
 log "Using DMD release archive flavor: $DMD_ARCHIVE_FLAVOR"
 
-if [[ "$TRACK" == "latest20" || "$TRACK" == "both" ]]; then
-    if ! resolve_latest_versions "$LATEST_VERSIONS_FILE"; then
-        echo "Failed to resolve latest 20 versions from release index" >&2
+if [[ "$TRACK" == "latest20" || "$TRACK" == "both" || $RESOLVE_LATEST_ONLY -eq 1 ]]; then
+    if ! ensure_latest_versions_ready; then
         exit 1
     fi
 fi
 
+if [[ $RESOLVE_LATEST_ONLY -eq 1 ]]; then
+    log "Latest snapshot ready: $LATEST_VERSIONS_FILE"
+    exit 0
+fi
+
+if [[ $PREPARE_CACHE_ONLY -eq 1 ]]; then
+    overall_rc=0
+    if [[ "$TRACK" == "latest20" || "$TRACK" == "both" ]]; then
+        prepare_track_cache "latest20" "$LATEST_VERSIONS_FILE" || overall_rc=1
+    fi
+    if [[ "$TRACK" == "compatible20" || "$TRACK" == "both" ]]; then
+        prepare_track_cache "compatible20" "$COMPAT_VERSIONS_FILE" || overall_rc=1
+    fi
+    exit "$overall_rc"
+fi
+
+overall_rc=0
 if [[ "$TRACK" == "latest20" ]]; then
     if [[ -n "$OUT_CSV" ]]; then
-        run_track "latest20" "$LATEST_VERSIONS_FILE" "$OUT_CSV"
+        run_track "latest20" "$LATEST_VERSIONS_FILE" "$OUT_CSV" || overall_rc=1
     else
-        run_track "latest20" "$LATEST_VERSIONS_FILE" "$ARTIFACT_DIR/results_raw.csv"
+        run_track "latest20" "$LATEST_VERSIONS_FILE" "$ARTIFACT_DIR/results_raw.csv" || overall_rc=1
     fi
 elif [[ "$TRACK" == "compatible20" ]]; then
     if [[ -n "$OUT_CSV" ]]; then
-        run_track "compatible20" "$COMPAT_VERSIONS_FILE" "$OUT_CSV"
+        run_track "compatible20" "$COMPAT_VERSIONS_FILE" "$OUT_CSV" || overall_rc=1
     else
-        run_track "compatible20" "$COMPAT_VERSIONS_FILE" "$ARTIFACT_DIR/results_raw.csv"
+        run_track "compatible20" "$COMPAT_VERSIONS_FILE" "$ARTIFACT_DIR/results_raw.csv" || overall_rc=1
     fi
 else
-    run_track "latest20" "$LATEST_VERSIONS_FILE" "$ARTIFACT_DIR/latest20/results_raw.csv"
-    run_track "compatible20" "$COMPAT_VERSIONS_FILE" "$ARTIFACT_DIR/compatible20/results_raw.csv"
+    run_track "latest20" "$LATEST_VERSIONS_FILE" "$ARTIFACT_DIR/latest20/results_raw.csv" || overall_rc=1
+    run_track "compatible20" "$COMPAT_VERSIONS_FILE" "$ARTIFACT_DIR/compatible20/results_raw.csv" || overall_rc=1
     cp "$ARTIFACT_DIR/compatible20/results_raw.csv" "$ARTIFACT_DIR/results_raw.csv"
     log "[both] Copied compatible track CSV to $ARTIFACT_DIR/results_raw.csv for convenience"
 fi
+
+exit "$overall_rc"
