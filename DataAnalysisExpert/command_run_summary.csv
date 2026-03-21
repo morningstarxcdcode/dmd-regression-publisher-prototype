@@ -1,0 +1,17 @@
+target,status,exit_code,duration_sec,timeout_sec,log_file
+dmdbench-build,pass,0,5,30,DataAnalysisExpert/command_logs/dmdbench-build_20260321_112909.log
+bench-latest,pass,0,27,1800,DataAnalysisExpert/command_logs/bench-latest_20260321_112914.log
+bench-compatible,pass,0,216,1800,DataAnalysisExpert/command_logs/bench-compatible_20260321_112941.log
+bench-both,pass,0,195,1800,DataAnalysisExpert/command_logs/bench-both_20260321_113317.log
+analyze-both,pass,0,1,180,DataAnalysisExpert/command_logs/analyze-both_20260321_113632.log
+trace,pass,0,5,300,DataAnalysisExpert/command_logs/trace_20260321_113633.log
+switch-bench,pass,0,35,300,DataAnalysisExpert/command_logs/switch-bench_20260321_113638.log
+not-done,pass,0,589,3600,DataAnalysisExpert/command_logs/not-done_20260321_113713.log
+not-done-perfetto,pass,0,72,3600,DataAnalysisExpert/command_logs/not-done-perfetto_20260321_114702.log
+runtime-libs,pass,0,43,900,DataAnalysisExpert/command_logs/runtime-libs_20260321_114814.log
+dub-pgo,pass,0,238,1800,DataAnalysisExpert/command_logs/dub-pgo_20260321_114857.log
+broader-gist,pass,0,263,3600,DataAnalysisExpert/command_logs/broader-gist_20260321_115255.log
+strict-perf-probe,pass,0,2,300,DataAnalysisExpert/command_logs/strict-perf-probe_20260321_115718.log
+linux-gap-close,pass,0,0,1800,DataAnalysisExpert/command_logs/linux-gap-close_20260321_115720.log
+build-parser-threaded-dmd,pass,0,1,1800,DataAnalysisExpert/command_logs/build-parser-threaded-dmd_20260321_115720.log
+parser-thread-compare,pass,0,40,900,DataAnalysisExpert/command_logs/parser-thread-compare_20260321_115721.log

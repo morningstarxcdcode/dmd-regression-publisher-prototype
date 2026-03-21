@@ -1,0 +1,39 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='960' height='404' viewBox='0 0 960 404'>
+<style>text{font-family:Arial, sans-serif; fill:#0f172a;} .title{font-size:16px; font-weight:bold;} .label{font-size:12px;} .axis{stroke:#94a3b8; stroke-width:1;} .grid{stroke:#e2e8f0; stroke-width:1;}</style>
+<text class='title' x='60' y='32'>Smoke Duration by Entry</text>
+<line class='axis' x1='60' y1='344' x2='900' y2='344'/>
+<line class='axis' x1='60' y1='60' x2='60' y2='344'/>
+<rect x='60' y='60.0' width='17.4' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='72.0' text-anchor='end'>dmdbench_build</text>
+<text class='label' x='83.4' y='72.0'>3</text>
+<rect x='60' y='84.0' width='17.4' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='96.0' text-anchor='end'>sweep_both_smoke</text>
+<text class='label' x='83.4' y='96.0'>3</text>
+<rect x='60' y='108.0' width='5.8' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='120.0' text-anchor='end'>analyze_both_smoke</text>
+<text class='label' x='71.8' y='120.0'>1</text>
+<rect x='60' y='132.0' width='40.6' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='144.0' text-anchor='end'>trace_smoke</text>
+<text class='label' x='106.6' y='144.0'>7</text>
+<rect x='60' y='156.0' width='17.4' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='168.0' text-anchor='end'>switch_scale_smoke</text>
+<text class='label' x='83.4' y='168.0'>3</text>
+<rect x='60' y='180.0' width='52.1' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='192.0' text-anchor='end'>runtime_libs_smoke</text>
+<text class='label' x='118.1' y='192.0'>9</text>
+<rect x='60' y='204.0' width='840.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='216.0' text-anchor='end'>dub_pgo_smoke</text>
+<text class='label' x='906.0' y='216.0'>145</text>
+<rect x='60' y='228.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='240.0' text-anchor='end'>strict_perf_probe</text>
+<text class='label' x='66.0' y='240.0'>0</text>
+<rect x='60' y='252.0' width='5.8' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='264.0' text-anchor='end'>linux_gap_close</text>
+<text class='label' x='71.8' y='264.0'>1</text>
+<rect x='60' y='276.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='288.0' text-anchor='end'>build_parser_threaded</text>
+<text class='label' x='66.0' y='288.0'>0</text>
+<rect x='60' y='300.0' width='17.4' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='312.0' text-anchor='end'>parser_thread_compare</text>
+<text class='label' x='83.4' y='312.0'>3</text>
+</svg>

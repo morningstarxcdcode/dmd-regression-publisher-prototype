@@ -1,0 +1,12 @@
+name,status,exit_code,duration_sec,log_file
+dmdbench_build,pass,0,3,DataAnalysisExpert/smoke_logs/dmdbench_build_20260320_202725.log
+sweep_both_smoke,pass,0,3,DataAnalysisExpert/smoke_logs/sweep_both_smoke_20260320_202728.log
+analyze_both_smoke,pass,0,1,DataAnalysisExpert/smoke_logs/analyze_both_smoke_20260320_202731.log
+trace_smoke,pass,0,7,DataAnalysisExpert/smoke_logs/trace_smoke_20260320_202732.log
+switch_scale_smoke,pass,0,3,DataAnalysisExpert/smoke_logs/switch_scale_smoke_20260320_202739.log
+runtime_libs_smoke,pass,0,9,DataAnalysisExpert/smoke_logs/runtime_libs_smoke_20260320_202742.log
+dub_pgo_smoke,pass,0,145,DataAnalysisExpert/smoke_logs/dub_pgo_smoke_20260320_202751.log
+strict_perf_probe,pass,0,0,DataAnalysisExpert/smoke_logs/strict_perf_probe_20260320_203016.log
+linux_gap_close,pass,0,1,DataAnalysisExpert/smoke_logs/linux_gap_close_20260320_203016.log
+build_parser_threaded,pass,0,0,DataAnalysisExpert/smoke_logs/build_parser_threaded_20260320_203017.log
+parser_thread_compare,pass,0,3,DataAnalysisExpert/smoke_logs/parser_thread_compare_20260320_203017.log

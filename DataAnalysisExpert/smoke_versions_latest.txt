@@ -1,0 +1,2 @@
+# Fast smoke input for the latest-track code path.
+2.103.0

@@ -1,0 +1,12 @@
+name,status,exit_code,duration_sec,log_file
+bench-compatible-smoke,pass,0,1665.96,DataAnalysisExpert/command_logs/bench-compatible-smoke_20260320_120805.log
+dmdbench-analyze,pass,0,0.82,DataAnalysisExpert/command_logs/dmdbench-analyze_20260320_114756.log
+dmdbench-not-done-list,pass,0,0.94,DataAnalysisExpert/command_logs/dmdbench-not-done-list_20260320_124616.log
+dmdbench-not-done-native,pass,0,3.82,DataAnalysisExpert/command_logs/dmdbench-not-done-native_20260320_114906.log
+dmdbench-switch,pass,0,60.8,DataAnalysisExpert/command_logs/dmdbench-switch_20260320_114757.log
+dmdbench-trace,pass,0,0.13,DataAnalysisExpert/command_logs/dmdbench-trace_20260320_114757.log
+dmdbench-zero-cost,pass,0,1033.72,DataAnalysisExpert/command_logs/dmdbench-zero-cost_20260320_124617.log
+python-analyze,pass,0,1.26,DataAnalysisExpert/command_logs/python-analyze_20260320_114910.log
+python-runtime-libs,pass,0,9.72,DataAnalysisExpert/command_logs/python-runtime-libs_20260320_120755.log
+python-switch,pass,0,1102.01,DataAnalysisExpert/command_logs/python-switch_20260320_114933.log
+run-trace-sh,pass,0,22.29,DataAnalysisExpert/command_logs/run-trace-sh_20260320_114911.log

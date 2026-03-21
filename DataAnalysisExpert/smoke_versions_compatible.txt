@@ -1,0 +1,2 @@
+# Fast smoke input for the compatible-track code path.
+2.090.1

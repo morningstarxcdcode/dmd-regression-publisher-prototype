@@ -1,0 +1,39 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='960' height='404' viewBox='0 0 960 404'>
+<style>text{font-family:Arial, sans-serif; fill:#0f172a;} .title{font-size:16px; font-weight:bold;} .label{font-size:12px;} .axis{stroke:#94a3b8; stroke-width:1;} .grid{stroke:#e2e8f0; stroke-width:1;}</style>
+<text class='title' x='60' y='32'>Manual Smoke Duration by Entry</text>
+<line class='axis' x1='60' y1='344' x2='900' y2='344'/>
+<line class='axis' x1='60' y1='60' x2='60' y2='344'/>
+<rect x='60' y='60.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='72.0' text-anchor='end'>bench-compatible-smoke</text>
+<text class='label' x='66.0' y='72.0'>0</text>
+<rect x='60' y='84.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='96.0' text-anchor='end'>dmdbench-analyze</text>
+<text class='label' x='66.0' y='96.0'>0</text>
+<rect x='60' y='108.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='120.0' text-anchor='end'>dmdbench-not-done-list</text>
+<text class='label' x='66.0' y='120.0'>0</text>
+<rect x='60' y='132.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='144.0' text-anchor='end'>dmdbench-not-done-native</text>
+<text class='label' x='66.0' y='144.0'>0</text>
+<rect x='60' y='156.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='168.0' text-anchor='end'>dmdbench-switch</text>
+<text class='label' x='66.0' y='168.0'>0</text>
+<rect x='60' y='180.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='192.0' text-anchor='end'>dmdbench-trace</text>
+<text class='label' x='66.0' y='192.0'>0</text>
+<rect x='60' y='204.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='216.0' text-anchor='end'>dmdbench-zero-cost</text>
+<text class='label' x='66.0' y='216.0'>0</text>
+<rect x='60' y='228.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='240.0' text-anchor='end'>python-analyze</text>
+<text class='label' x='66.0' y='240.0'>0</text>
+<rect x='60' y='252.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='264.0' text-anchor='end'>python-runtime-libs</text>
+<text class='label' x='66.0' y='264.0'>0</text>
+<rect x='60' y='276.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='288.0' text-anchor='end'>python-switch</text>
+<text class='label' x='66.0' y='288.0'>0</text>
+<rect x='60' y='300.0' width='0.0' height='16' fill='#2f855a'/>
+<text class='label' x='52' y='312.0' text-anchor='end'>run-trace-sh</text>
+<text class='label' x='66.0' y='312.0'>0</text>
+</svg>

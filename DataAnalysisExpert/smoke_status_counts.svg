@@ -1,0 +1,9 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='720' height='420' viewBox='0 0 720 420'>
+<style>text{font-family:Arial, sans-serif; fill:#0f172a;} .title{font-size:16px; font-weight:bold;} .label{font-size:12px;} .axis{stroke:#94a3b8; stroke-width:1;} .grid{stroke:#e2e8f0; stroke-width:1;}</style>
+<text class='title' x='60' y='32'>Command Outcome Counts</text>
+<line class='axis' x1='60' y1='360' x2='660' y2='360'/>
+<line class='axis' x1='60' y1='60' x2='60' y2='360'/>
+<rect x='180.0' y='60.0' width='360.0' height='300.0' fill='#2f855a'/>
+<text class='label' x='360.0' y='54.0' text-anchor='middle'>11</text>
+<text class='label' x='360.0' y='378.0' text-anchor='middle'>pass</text>
+</svg>
