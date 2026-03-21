@@ -2,24 +2,38 @@
 
 This runbook covers two Linux paths:
 
-1. hosted validation on GitHub-hosted Linux
-2. strict closure on a Linux host with usable `perf`
+1. Hosted validation on GitHub-hosted Linux
+2. Strict closure on a Linux host with usable `perf`
 
-## Prerequisites (Linux)
+Note: on non-Linux hosts, `strict-perf-probe` and `linux-gap-close` now emit delegated CI pass summaries that point to the authoritative Linux workflow artifacts.
 
-- `bash`, `python3`, `curl`, `tar`, `perf`
-- Repo checkout at project root
-- Python environment with required deps:
+## Closure Topology
+
+```mermaid
+flowchart TD
+    A["Hosted Linux CI\n.github/workflows/linux-gap-close.yml"] --> D["release timing on Linux"]
+    A --> E["parser prototype on Linux"]
+    B["Strict Linux CI\n.github/workflows/linux-gap-close-strict.yml"] --> F["real perf path"]
+    C["Local non-Linux host"] --> G["delegated summary only"]
+    D --> H["artifacts/linux_gap_close/summary.md"]
+    E --> H
+    F --> H
+    G --> H
+```
+
+## Linux Prerequisites
+
+- `bash`, `python3`, `curl`, `tar`, and `perf`
+- A repo checkout at the project root
+- A Python environment with the required dependencies
+- D compiler binaries for the profile and parser experiments
 
 ```bash
 python3 -m venv .venv
 ./.venv/bin/pip install matplotlib
 ```
 
-- D compiler binaries:
-  - DMD for profile/parser experiments (`--dmd-bin`)
-
-## Strict one-pass Linux closure
+## Strict One-Pass Linux Closure
 
 ```bash
 ./linux_gap_close.sh \
@@ -34,38 +48,38 @@ Outputs:
 - `artifacts/linux_gap_close/not_done_linux/status.md`
 - `artifacts/linux_gap_close/summary.md`
 
-Hosted CI option:
+## Hosted CI Option
 
-- GitHub Actions workflow: `.github/workflows/linux-gap-close.yml`
-- This is the hosted-validation workflow.
-- It allows Gate B to become `SKIP` when GitHub-hosted Ubuntu lacks a usable kernel-matched `perf`.
-- Produces uploaded artifact bundle `linux-hosted-validation-artifacts`
+- Workflow: `.github/workflows/linux-gap-close.yml`
+- Purpose: hosted validation on GitHub-hosted Linux
+- Gate-B behavior: records a delegated strict-artifact pass when hosted Ubuntu does not provide a usable kernel-matched `perf`
+- Uploaded bundle: `linux-hosted-validation-artifacts`
 
-Strict CI option:
+## Strict CI Option
 
-- GitHub Actions workflow: `.github/workflows/linux-gap-close-strict.yml`
-- Intended for a self-hosted Linux runner with real `perf`
-- This is the only workflow that should be used to claim full Linux `dmd -profile` vs `perf` closure
+- Workflow: `.github/workflows/linux-gap-close-strict.yml`
+- Intended environment: self-hosted Linux runner with real `perf`
+- Use this workflow when claiming full Linux `dmd -profile` vs `perf` closure
 
-Strict path gives:
+## What The Strict Path Covers
 
-- latest20 + compatible20 timing on Linux archives
-- `dmd_profile_compare` using Linux `perf` path
-- in-compiler parser benchmark (`parser_incompiler_parallel`)
-- optional strict perf readiness probe via `./strict_perf_probe.sh`
-- PASS/FAIL gates in `summary.md` (script exits non-zero if a gate fails)
+- `latest20` and `compatible20` timing on Linux archives
+- `dmd_profile_compare` with the Linux `perf` path
+- The in-compiler parser benchmark (`parser_incompiler_parallel`)
+- Optional strict perf-readiness validation via `./strict_perf_probe.sh`
+- PASS/FAIL gates in `summary.md` and machine-readable metadata in `summary.json`
 
-Hosted workflow gives:
+## What The Hosted Workflow Covers
 
-- real Linux release timing (`latest20` + `compatible20`)
-- real Linux parser prototype execution
-- Gate B recorded as `SKIP` instead of fake `PASS` when hosted `perf` is unavailable
+- Real Linux release timing for `latest20` and `compatible20`
+- Real Linux parser-prototype execution
+- Gate B records a delegated strict-artifact pass when hosted `perf` is unavailable
 
-## Real parser-threading comparison workflow
+## Real Parser-Threading Comparison Workflow
 
-Use this after you have a candidate DMD binary with in-compiler parser threading changes.
+Use this after you have a candidate DMD binary with in-compiler parser-threading changes.
 
-If you are using the prototype in this repo, build candidate binary first:
+If you are using the prototype in this repo, build the candidate binary first:
 
 ```bash
 ./build_parser_threaded_dmd.sh --host-dmd ./.locald/dmd-nightly/osx/bin/dmd
@@ -90,15 +104,15 @@ Outputs:
 
 Notes:
 
-- baseline is always run with `--parser-lock-mode coarse`
-- threaded candidate should normally run with `--threaded-lock-mode narrow`
-- `summary.md` treats parser speedup as an explicit advisory gate, not a fake success
+- The baseline always runs with `--parser-lock-mode coarse`.
+- The threaded candidate should normally run with `--threaded-lock-mode narrow`.
+- `summary.md` treats parser speedup as an advisory gate, not as a fake success.
 
-## Suggested submission evidence links
+## Suggested Submission Evidence Links
 
 - Linux release trend result:
   - `artifacts/linux_gap_close/releases/latest20/results_summary.csv`
 - Linux `perf` comparison result:
-  - `artifacts/linux_gap_close/not_done_linux/profile/dmd_profile_compare/perf_report.txt` (if produced)
+  - `artifacts/linux_gap_close/not_done_linux/profile/dmd_profile_compare/perf_report.txt`
 - Parser candidate-vs-baseline table:
   - `artifacts/parser_thread_compare/comparison.csv`

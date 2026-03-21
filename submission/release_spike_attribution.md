@@ -1,5 +1,24 @@
 # Release Spike Attribution Notes
 
+This note narrows the slowdown question step by step instead of jumping straight to a first-bad-commit claim.
+
+## Narrowing Topology
+
+```mermaid
+flowchart TD
+    A["compatible20 rerun"] --> B["2.096.0 -> 2.096.1 remains the best window"]
+    B --> C["official changelog items"]
+    B --> D["release compare commits"]
+    C --> E["semantic-analysis candidates"]
+    C --> F["overload-resolution candidates"]
+    C --> G["CTFE candidates"]
+    D --> H["small compiler-side commit set"]
+    E --> I["source-built bisect follow-up"]
+    F --> I
+    G --> I
+    H --> I
+```
+
 ## Benchmark and interpretation
 
 - Benchmark: `benchmark.d`
@@ -7,15 +26,15 @@
 - Metric: wall-clock compile time in milliseconds
 - Policy: `2` warmups + `7` measured runs per release, median of measured runs
 - Machine: `Souravs-MacBook-Air` / `Apple M4` / `Darwin 25.2.0 arm64`
-- Important: the nightly build was used only for separate `-ftime-trace` phase analysis, not for the release sweep
+- Important: the nightly build is used only for separate `-ftime-trace` phase analysis, not for the release sweep.
 
 ## Current compatible-track spike candidate
 
 From the current tracked dataset:
 
 - `2.096.0 -> 2.096.1`: `+6.780%`
-- confidence intervals are separated in `artifacts/compatible20/regression_table.csv`
-- this is notable, but it does **not** pass the current hard `>= 10%` compile-regression threshold
+- Confidence intervals are separated in `artifacts/compatible20/regression_table.csv`.
+- This is notable, but it does **not** pass the current hard `>= 10%` compile‑regression threshold.
 
 This differs from the earlier emailed `+106%` observation. Treat the larger number as an earlier run that still needs reconciliation against the current rerun before it is presented as a confirmed release regression.
 
@@ -26,7 +45,7 @@ This differs from the earlier emailed `+106%` observation. Treat the larger numb
 
 The `2.096.1` changelog is the most relevant release page for the slowdown window because it is a patch release with a short, bounded compiler change set.
 
-## 2.096.1 compiler-side items most likely to matter
+## 2.096.1 Compiler-Side Items Most Likely to Matter
 
 Relevant compiler-side entries on the official `2.096.1` changelog page:
 
@@ -36,7 +55,7 @@ Relevant compiler-side entries on the official `2.096.1` changelog page:
 - Bugzilla 21806: overload selection ignores slice
 - Bugzilla 21799: CTFE does not call base class destructor for `extern(D)` classes
 
-For a template/CTFE-heavy benchmark, the strongest candidate buckets are:
+For a template/CTFE‑heavy benchmark, the strongest candidate buckets are:
 
 - semantic / flow-analysis changes
 - overload-resolution changes
@@ -59,8 +78,8 @@ These are the first commits to check if the slowdown remains reproducible in a s
 
 The current evidence is strong enough to say:
 
-- the methodology should be made explicit in the plot/report
-- `2.096.0 -> 2.096.1` is the right release window to investigate first
-- the official changelog and actual release compare already narrow the search to a small compiler/CTFE-heavy commit set
+- The methodology should be explicit in the plot/report.
+- `2.096.0 -> 2.096.1` is the right release window to investigate first.
+- The official changelog and actual release compare already narrow the search to a small compiler/CTFE‑heavy commit set.
 
-The current evidence is **not** yet strong enough to claim a single first-bad commit from a true bisect. That remains a follow-up step.
+The current evidence is **not** yet strong enough to claim a single first‑bad commit from a true bisect. That remains a follow‑up step.

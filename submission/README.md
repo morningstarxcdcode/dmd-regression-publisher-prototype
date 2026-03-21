@@ -1,13 +1,21 @@
 # Submission Folder Index
 
-- `mentor_packet.md`: concise mentor-facing summary and specific questions
-- `done_not_done_audit.md`: detailed done/partial/not-done matrix
-- `high_signal_findings.md`: evidence-first findings extracted from artifacts
-- `community_activity.md`: public engagement tracker (issues/PRs/forum links)
-- `dennis_reply_draft.md`: concise reply draft addressing methodology and next attribution steps
-- `dennis_followup_short.md`: shorter follow-up mail with changelog and candidate-commit references
-- `release_spike_attribution.md`: release-window spike notes with changelog links and candidate commits
-- `reproducibility_manifest.md`: exact commands and environment snapshot
-- `linux_gap_close_runbook.md`: Linux workflow for closing remaining partial items
-- `engineering_notes.md`: design tradeoffs and rationale
-- `ai_usage_disclosure.md`: AI usage disclosure
+This folder holds the mentor-facing side of the repo. Read it as a guided packet: summary first, evidence next, then repro and follow-up notes.
+
+```mermaid
+flowchart TD
+    A["mentor_packet.md\none-page review entry"] --> B["high_signal_findings.md\nevidence-backed claims"]
+    B --> C["evidence_packet.md\nartifact map + refresh commands"]
+    C --> D["reproducibility_manifest.md\ncanonical rerun paths"]
+    D --> E["engineering_notes.md\ndesign trade-offs"]
+    E --> F["release_spike_attribution.md\nslowdown narrowing"]
+    E --> G["linux_gap_close_runbook.md\nLinux-only closure path"]
+```
+
+- `mentor_packet.md`: A concise mentor-facing summary and a review checklist.
+- `high_signal_findings.md`: Evidence-first findings extracted from the current artifact set.
+- `release_spike_attribution.md`: Notes for the current release-window slowdown candidate.
+- `reproducibility_manifest.md`: Environment notes, canonical commands, and verification entry points.
+- `linux_gap_close_runbook.md`: Linux-only workflow notes for closing the remaining `perf` and parser gaps.
+- `engineering_notes.md`: Design tradeoffs, constraints, and rationale.
+- `evidence_packet.md`: A curated map of the most important artifacts and refresh commands.
