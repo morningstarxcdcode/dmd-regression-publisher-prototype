@@ -1,0 +1,10 @@
+{
+  "name": "dmdbench",
+  "description": "DMD regression benchmark and analysis toolkit",
+  "authors": ["OpenAI Codex"],
+  "license": "MIT",
+  "targetType": "executable",
+  "targetPath": "bin",
+  "sourcePaths": ["source"],
+  "dependencies": {}
+}

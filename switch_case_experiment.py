@@ -149,6 +149,10 @@ def scaling_exponent(cases: list[int], medians: list[float]) -> float:
     return numer / denom
 
 
+def mermaid_block(diagram_lines: list[str]) -> str:
+    return "```mermaid\n" + "\n".join(diagram_lines) + "\n```\n"
+
+
 def write_plot(out_png: Path, summary_rows: list[dict[str, object]]) -> None:
     import matplotlib
 
@@ -399,11 +403,31 @@ def main() -> int:
     with out_md.open("w", encoding="utf-8") as f:
         f.write("# Switch-Case Compile-Time Scaling\n\n")
         f.write(f"Generated: {dt.datetime.now(dt.UTC).strftime('%Y-%m-%d %H:%M:%SZ')}\n\n")
+        f.write("Each point in this run comes from a separately generated D source file. ")
+        f.write("The metric is compile-only wall time, not program runtime.\n\n")
         f.write(f"- Compiler: `{compiler}`\n")
         f.write(f"- Case counts: `{','.join(str(c) for c in counts)}`\n")
         f.write(f"- Runs per point: `{args.runs}` (warmups: `{args.warmups}`)\n")
         f.write("- Mode: compile-only (`-c -O`)\n")
         f.write(f"- Host: `{machine['hostname']}` / `{machine['cpu_brand']}` / `{machine['os']}`\n\n")
+        f.write("## Experiment Pipeline\n\n")
+        f.write(
+            mermaid_block(
+                [
+                    "flowchart TD",
+                    '    A["case counts\\nparameter sweep"] --> B["write_switch_source()\\ngenerated/switch_N.d"]',
+                    '    B --> C["warmup compiles\\nshape the cache, do not score"]',
+                    '    B --> D["measured compiles\\nwall-clock compile time"]',
+                    '    D --> E["results_raw.csv\\nper-run samples"]',
+                    '    E --> F["results_summary.csv\\nmedian, MAD, CI"]',
+                    '    F --> G["scaling exponent\\nlog-log slope"]',
+                    '    F --> H["compile_time_vs_cases.png\\nerror-bar plot"]',
+                    '    G --> I["report.md\\ntrend summary"]',
+                    '    H --> I',
+                ]
+            )
+        )
+        f.write("\n")
         f.write("## Summary\n\n")
         f.write("| Cases | Median ms | MAD ms | 95% CI ms | Object size bytes |\n")
         f.write("|---:|---:|---:|---:|---:|\n")

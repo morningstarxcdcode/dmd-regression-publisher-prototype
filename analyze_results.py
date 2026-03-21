@@ -446,6 +446,131 @@ def read_csv_if_exists(path: Path) -> List[Dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def mermaid_block(diagram_lines: Sequence[str]) -> List[str]:
+    return ["```mermaid", *diagram_lines, "```"]
+
+
+def build_report_topology(
+    track_results: Dict[str, TrackResult],
+    trace_rows: Sequence[Dict[str, str]],
+    granularity_rows: Sequence[Dict[str, str]],
+) -> List[str]:
+    lines: List[str] = [
+        "flowchart TD",
+        "    subgraph Inputs",
+    ]
+
+    input_ids: List[Tuple[str, str]] = []
+    for idx, track_name in enumerate(sorted(track_results), start=1):
+        node_id = f"I{idx}"
+        if track_name == "latest20":
+            label = "latest20/results_raw.csv\\nliteral latest-release window"
+        elif track_name == "compatible20":
+            label = "compatible20/results_raw.csv\\nregression-quality window"
+        else:
+            label = f"{track_name}/results_raw.csv\\nselected analysis lane"
+        input_ids.append((node_id, track_name))
+        lines.append(f'        {node_id}["{label}"]')
+    if trace_rows:
+        lines.append('        T["trace_phase_summary.csv\\nphase attribution"]')
+    if granularity_rows:
+        lines.append('        G["trace_granularity_sweep.csv\\ngranularity trade-off"]')
+
+    lines.extend(
+        [
+            "    end",
+            "    subgraph Analysis",
+            '        S["summarize_versions()\\nmedian, MAD, CI, failures"]',
+            '        R["regression_scan()\\nthreshold + CI separation"]',
+            '        P["plot_compile() + plot_artifact_size()\\ntrend charts"]',
+            '        B["build_report()\\nmethodology + findings + trace notes"]',
+            "    end",
+            "    subgraph Outputs",
+            '        O1["per-track CSVs\\nresults_summary.csv + regression_table.csv"]',
+            '        O2["per-track plots\\ncompile_time_trend + artifact_size_trend"]',
+            '        O3["report.md\\nreader-facing synthesis"]',
+            "    end",
+        ]
+    )
+
+    for node_id, _track_name in input_ids:
+        lines.append(f"    {node_id} --> S")
+    if trace_rows:
+        lines.append("    T --> B")
+    if granularity_rows:
+        lines.append("    G --> B")
+
+    lines.extend(
+        [
+            "    S --> R",
+            "    S --> P",
+            "    S --> O1",
+            "    R --> O1",
+            "    R --> B",
+            "    P --> O2",
+            "    O1 --> B",
+            "    O2 --> B",
+            "    B --> O3",
+        ]
+    )
+    return lines
+
+
+def build_report_intro(track_results: Dict[str, TrackResult]) -> List[str]:
+    track_names = sorted(track_results)
+    if "latest20" in track_results and "compatible20" in track_results:
+        return [
+            "This report keeps two stories separate on purpose:",
+            "- `latest20` shows what the newest release window looks like on this host.",
+            "- `compatible20` stays stable enough for regression scoring on this host.",
+        ]
+    if len(track_names) == 1:
+        track_name = track_names[0]
+        if track_name == "latest20":
+            return [
+                "This report focuses on the `latest20` lane so the literal latest-release story stays easy to audit."
+            ]
+        if track_name == "compatible20":
+            return [
+                "This report focuses on the `compatible20` lane so the regression-scoring series stays easy to audit."
+            ]
+        return [f"This report focuses on the `{track_name}` lane so its raw series and findings stay easy to audit."]
+    return ["This report summarizes the selected release-analysis lanes for this host."]
+
+
+def build_track_notes(track_results: Dict[str, TrackResult]) -> Tuple[str, List[str]]:
+    if "latest20" in track_results and "compatible20" in track_results:
+        return (
+            "Track Comparison",
+            [
+                "- `latest20` is used to stay literal with Dennis's latest-release direction, even if host compatibility causes failures.",
+                "- `compatible20` is used for stable regression scoring on this machine.",
+                "- Artifact size represents compile-only object output (`-c`), not final linked executable size.",
+            ],
+        )
+
+    track_name = next(iter(sorted(track_results)))
+    if track_name == "latest20":
+        note_lines = [
+            "- `latest20` keeps the newest release window visible on this machine, including failures.",
+            "- This lane is useful for availability and breakage review, not only regression scoring.",
+            "- Artifact size represents compile-only object output (`-c`), not final linked executable size.",
+        ]
+    elif track_name == "compatible20":
+        note_lines = [
+            "- `compatible20` is the stable regression-scoring lane on this machine.",
+            "- This lane filters toward releases that can be measured consistently on the current host.",
+            "- Artifact size represents compile-only object output (`-c`), not final linked executable size.",
+        ]
+    else:
+        note_lines = [
+            f"- `{track_name}` is the selected analysis lane for this report.",
+            "- The report keeps the raw series, derived flags, and trace context together in one place.",
+            "- Artifact size represents compile-only object output (`-c`), not final linked executable size.",
+        ]
+    return "Track Notes", note_lines
+
+
 def build_report(
     report_path: Path,
     track_results: Dict[str, TrackResult],
@@ -456,6 +581,12 @@ def build_report(
     lines.append("# DMD Performance Regression Study")
     lines.append("")
     lines.append(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%SZ')}")
+    lines.append("")
+    lines.extend(build_report_intro(track_results))
+    lines.append("")
+    lines.append("## Report Topology")
+    lines.append("")
+    lines.extend(mermaid_block(build_report_topology(track_results, trace_rows, granularity_rows)))
     lines.append("")
     lines.append("## Setup Snapshot")
     lines.append("")
@@ -490,11 +621,10 @@ def build_report(
     )
 
     lines.append("")
-    lines.append("## Track Comparison")
+    notes_heading, note_lines = build_track_notes(track_results)
+    lines.append(f"## {notes_heading}")
     lines.append("")
-    lines.append("- `latest20` is used to stay literal with Dennis's latest-release direction, even if host compatibility causes failures.")
-    lines.append("- `compatible20` is used for stable regression scoring on this machine.")
-    lines.append("- Artifact size represents compile-only object output (`-c`), not final linked executable size.")
+    lines.extend(note_lines)
 
     if "latest20" in track_results:
         latest = track_results["latest20"]

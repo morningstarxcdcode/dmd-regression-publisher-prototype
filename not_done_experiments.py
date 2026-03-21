@@ -208,6 +208,10 @@ def emit_markdown_table(headers: list[str], rows: list[list[object]]) -> list[st
     return lines
 
 
+def emit_mermaid_block(diagram_lines: list[str]) -> list[str]:
+    return ["```mermaid", *diagram_lines, "```"]
+
+
 def remove_tree(path: Path) -> None:
     if path.exists():
         shutil.rmtree(path, ignore_errors=True)
@@ -590,7 +594,23 @@ def run_gc_kernel_experiment(
     report_lines = [
         "# D runtime GC kernels",
         "",
+        "This report comes from one compiled benchmark binary that is run in three allocation shapes.",
+        "",
         "Compiler flags: `-O3 -release -boundscheck=off`",
+        "",
+        "## Benchmark topology",
+        "",
+        *emit_mermaid_block(
+            [
+                "flowchart TD",
+                '    A["mode set\\nsmall | mixed | large"] --> B["gc_kernels.d\\ncompile once with ldc2"]',
+                '    B --> C["warmup runs\\nnot scored"]',
+                '    B --> D["measured runs\\nwall time + GC.collect() time"]',
+                '    D --> E["results.csv\\nper-run samples"]',
+                '    E --> F["summary.csv\\nmedian wall/collect metrics"]',
+                '    F --> G["report.md\\nmode comparison"]',
+            ]
+        ),
         "",
         "Kernels:",
         "- `small`: short-lived small allocations",
@@ -886,7 +906,23 @@ def run_aa_kernel_experiment(
     report_lines = [
         "# D associative-array kernels",
         "",
+        "This benchmark holds the compiler constant and sweeps key type, workload shape, and table scale.",
+        "",
         "Compiler flags: `-O3 -release -boundscheck=off`",
+        "",
+        "## Benchmark topology",
+        "",
+        *emit_mermaid_block(
+            [
+                "flowchart TD",
+                '    A["key types\\nint | string | struct"] --> D["aa_kernels.d\\ncompiled once with ldc2"]',
+                '    B["workloads\\ninsert | lookup | mixed"] --> D',
+                '    C["scales\\n1k | 10k | 100k"] --> D',
+                '    D --> E["results.csv\\nper-run ns/op samples"]',
+                '    E --> F["summary.csv\\nmedian ops + wall time"]',
+                '    F --> G["report.md\\n100k-scale comparison"]',
+            ]
+        ),
         "",
     ]
     best_rows = [row for row in summary_rows if row["scale"] == 100_000]
@@ -1085,7 +1121,23 @@ def run_float_to_string_experiment(
     report_lines = [
         "# D float-to-string kernels",
         "",
+        "The same compiled binary is exercised on three floating-point datasets so the code shape stays comparable.",
+        "",
         "Compiler flags: `-O3 -release -boundscheck=off`",
+        "",
+        "## Benchmark topology",
+        "",
+        *emit_mermaid_block(
+            [
+                "flowchart TD",
+                '    A["datasets\\nnormal | scientific | special"] --> B["float_to_string_kernels.d\\ncompile once with ldc2"]',
+                '    B --> C["warmup runs"]',
+                '    B --> D["measured runs\\nops, chars, wall time"]',
+                '    D --> E["results.csv\\nper-run conversion samples"]',
+                '    E --> F["summary.csv\\nmedian ops + throughput"]',
+                '    F --> G["report.md\\ndataset comparison"]',
+            ]
+        ),
         "",
         *emit_markdown_table(
             ["Dataset", "Median ops", "Median wall ms", "Median conversions/sec"],
@@ -1167,6 +1219,20 @@ def run_phobos_section_analysis(out_dir: Path, archive_path: Path) -> dict[str, 
         "# libphobos2.a section analysis",
         "",
         f"Archive: `{archive_path}`",
+        "",
+        "## Analysis topology",
+        "",
+        *emit_mermaid_block(
+            [
+                "flowchart TD",
+                '    A["libphobos2.a"] --> B["objdump -h\\nsection headers per member"]',
+                '    B --> C["member_section_sizes.csv\\nmember x section rows"]',
+                '    C --> D["member_totals.csv\\naggregate by object"]',
+                '    C --> E["section_totals.csv\\naggregate by section name"]',
+                '    D --> F["report.md\\ntop members"]',
+                '    E --> F',
+            ]
+        ),
         "",
         "## Top members by total section bytes",
         "",
@@ -1583,10 +1649,28 @@ def run_c_vs_d_asm_experiment(out_dir: Path, ldc2: str, clang: str) -> dict[str,
     report_lines = [
         "# C vs D assembly comparison",
         "",
+        "Each kernel is compiled twice, once with `clang` and once with `ldc2`, and then the instruction streams are compared locally.",
+        "",
         f"- Kernels compared: {len(kernels)}",
         f"- Total clang instruction count: {total_clang}",
         f"- Total ldc2 instruction count: {total_ldc}",
         f"- Similarity ratio (avg/min/max): {avg_ratio:.4f} / {min_ratio:.4f} / {max_ratio:.4f}",
+        "",
+        "## Comparison topology",
+        "",
+        *emit_mermaid_block(
+            [
+                "flowchart TD",
+                '    A["kernel set\\n5 matched C/D workloads"] --> B["clang -O3\\nC object/asm"]',
+                '    A --> C["ldc2 -O3\\nD object/asm"]',
+                '    B --> D["instruction extraction"]',
+                '    C --> D',
+                '    D --> E["similarity.csv\\nratio per kernel"]',
+                '    D --> F["*_instruction_diff.txt\\nlocal diffs"]',
+                '    E --> G["report.md\\nkernel summary"]',
+                '    F --> H["godbolt_notes.md\\nfollow-up list"]',
+            ]
+        ),
         "",
         "| Kernel | Clang inst | LDC inst | Similarity |",
         "|---|---:|---:|---:|",
@@ -1603,6 +1687,18 @@ def run_c_vs_d_asm_experiment(out_dir: Path, ldc2: str, clang: str) -> dict[str,
         "",
         "Local assembly diffs were produced for each kernel in this folder.",
         "Use https://d.godbolt.org/ with -O3 and compare clang vs ldc2 for:",
+        "",
+        "## Follow-up topology",
+        "",
+        *emit_mermaid_block(
+            [
+                "flowchart TD",
+                '    A["kernel pair\\nC source + D source"] --> B["local clang/ldc2 assembly diff"]',
+                '    B --> C["*_instruction_diff.txt"]',
+                '    C --> D["godbolt_notes.md"]',
+                '    D --> E["d.godbolt.org\\nmanual visual confirmation"]',
+            ]
+        ),
     ]
     for kernel in kernels:
         name = str(kernel["name"])
@@ -1962,19 +2058,43 @@ def attempt_perfetto_screenshot(out_dir: Path, trace_file: Path, timeout_sec: fl
     )
 
 
-def ensure_repo_clone(slug: str, base_dir: Path, timeout_sec: float) -> tuple[Path | None, str]:
-    local = base_dir / slug.replace("/", "__")
+def cached_repo_path(slug: str, base_dir: Path) -> Path:
+    return base_dir / slug.replace("/", "__")
+
+
+def ensure_repo_source(
+    slug: str,
+    base_dir: Path,
+    timeout_sec: float,
+    source_mode: str,
+    explicit_path: Path | None = None,
+) -> tuple[Path | None, str]:
+    if source_mode == "path":
+        if explicit_path is None:
+            return None, "--dub-upstream-path is required when --dub-upstream-source=path"
+        if not explicit_path.exists() or not (explicit_path / ".git").exists():
+            return None, f"invalid upstream path: {explicit_path}"
+        return explicit_path, "explicit_path"
+
+    local = cached_repo_path(slug, base_dir)
     if local.exists() and (local / ".git").exists():
-        return local, "existing"
+        return local, "existing_cache"
+
+    if source_mode == "cached":
+        return None, f"cached repo missing: {local}; run ./bootstrap_external_cache.sh"
 
     url = f"https://github.com/{slug}.git"
     cp = run_cmd(["git", "clone", "--depth", "1", url, str(local)], check=False, timeout=timeout_sec)
     if cp.returncode != 0:
         return None, (cp.stderr.strip().splitlines()[-1] if cp.stderr.strip() else "clone failed")
-    return local, "cloned"
+    return local, "cloned_cache"
 
 
-def resolve_git_ref(repo_dir: Path, ref: str, timeout_sec: float) -> tuple[str | None, str]:
+def ensure_repo_clone(slug: str, base_dir: Path, timeout_sec: float) -> tuple[Path | None, str]:
+    return ensure_repo_source(slug, base_dir, timeout_sec, "bootstrap")
+
+
+def resolve_git_ref(repo_dir: Path, ref: str, timeout_sec: float, *, allow_fetch: bool) -> tuple[str | None, str]:
     candidates = [ref]
     if not ref.startswith("origin/"):
         candidates.append(f"origin/{ref}")
@@ -1986,6 +2106,9 @@ def resolve_git_ref(repo_dir: Path, ref: str, timeout_sec: float) -> tuple[str |
         )
         if cp.returncode == 0:
             return cp.stdout.strip(), ""
+    if not allow_fetch:
+        return None, f"ref {ref} not available in cached repo"
+
     fetch_cp = run_cmd(
         ["git", "-C", str(repo_dir), "fetch", "--depth", "1", "origin", ref],
         check=False,
@@ -2061,7 +2184,11 @@ def run_dub_pgo_experiment(
     clone_timeout: float,
     workspace_root: Path,
     upstream_ref: str,
+    upstream_source: str,
+    upstream_path: Path | None,
 ) -> dict[str, object]:
+    out_dir = out_dir.resolve()
+    workspace_root = workspace_root.resolve()
     task_dir = out_dir / "dub_pgo"
     task_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2082,15 +2209,26 @@ def run_dub_pgo_experiment(
     cache_root = repo_root() / "artifacts" / "cache" / "dub_pgo"
     cache_root.mkdir(parents=True, exist_ok=True)
 
-    upstream_repo, clone_state = ensure_repo_clone("dlang/dub", cache_root, clone_timeout)
+    upstream_repo, clone_state = ensure_repo_source(
+        "dlang/dub",
+        cache_root,
+        clone_timeout,
+        upstream_source,
+        upstream_path,
+    )
     if upstream_repo is None:
         return task_result(
             "benchmark dub with PGO",
             "blocked_external",
-            reason=f"failed to clone dlang/dub: {clone_state}",
+            reason=f"failed to prepare dlang/dub source: {clone_state}",
         )
 
-    resolved_commit, resolve_err = resolve_git_ref(upstream_repo, upstream_ref, clone_timeout)
+    resolved_commit, resolve_err = resolve_git_ref(
+        upstream_repo,
+        upstream_ref,
+        clone_timeout,
+        allow_fetch=upstream_source == "bootstrap",
+    )
     if resolved_commit is None:
         return task_result(
             "benchmark dub with PGO",
@@ -2329,10 +2467,32 @@ def run_dub_pgo_experiment(
     report_lines = [
         "# dub PGO benchmark",
         "",
+        "The comparison keeps the workspace constant and changes only how `dub` itself is built and trained.",
+        "",
         f"Upstream ref request: `{upstream_ref}`",
         f"Resolved commit: `{resolved_commit}`",
         f"Clone state: `{clone_state}`",
         f"Profile files: `{len(profraw_files)}` raw, merged to `{profdata_path.name}`",
+        "",
+        "## PGO topology",
+        "",
+        *emit_mermaid_block(
+            [
+                "flowchart TD",
+                '    A["resolved dlang/dub checkout"] --> B["baseline build\\nplain ldmd2"]',
+                '    A --> C["instrumented build\\nprofile generation"]',
+                '    C --> D["training commands\\n.profraw files"]',
+                '    D --> E["ldc-profdata merge\\ndefault.profdata"]',
+                '    E --> F["PGO rebuild\\nfeedback-directed binary"]',
+                '    B --> G["runtime comparison"]',
+                '    F --> G',
+                '    G --> H["comparison.csv\\nmedian delta by command"]',
+                '    B --> I["binary-size summary"]',
+                '    F --> I',
+                '    H --> J["report.md\\nruntime + size view"]',
+                '    I --> J',
+            ]
+        ),
         "",
         "## Runtime comparison",
         "",
@@ -2454,8 +2614,8 @@ def run_non_zero_init_struct_scan(
     task_dir = out_dir / "large_non_zero_init_structs"
     task_dir.mkdir(parents=True, exist_ok=True)
 
-    repo_root = task_dir / "repos"
-    repo_root.mkdir(parents=True, exist_ok=True)
+    repos_dir = task_dir / "repos"
+    repos_dir.mkdir(parents=True, exist_ok=True)
     work_dir = task_dir / "probe_work"
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2467,9 +2627,20 @@ def run_non_zero_init_struct_scan(
     rows: list[dict[str, object]] = []
     hits: list[dict[str, object]] = []
     projects_scanned = 0
+    workspace_root = repo_root()
+    local_repo_overrides = {
+        "dlang/dmd": workspace_root / "external" / "dmd",
+        "dlang/druntime": workspace_root / ".locald" / "dmd-nightly" / "src" / "druntime",
+        "dlang/phobos": workspace_root / ".locald" / "dmd-nightly" / "src" / "phobos",
+        "dlang/dub": workspace_root / "artifacts" / "cache" / "dub_pgo" / "dlang__dub",
+    }
 
     for slug in slugs:
-        local_repo, state = ensure_repo_clone(slug, repo_root, clone_timeout)
+        override_repo = local_repo_overrides.get(slug)
+        if override_repo is not None and override_repo.exists():
+            local_repo, state = override_repo, "local_override"
+        else:
+            local_repo, state = ensure_repo_clone(slug, repos_dir, clone_timeout)
         if local_repo is None:
             rows.append(
                 {
@@ -3288,8 +3459,12 @@ def parse_max_rss_bytes(time_stderr: str) -> int | None:
 
 def find_allocator_lib(name: str, local_root: Path) -> Path | None:
     candidates = [
+        repo_root() / "artifacts" / "not_done" / "allocator_compare" / "allocators" / f"build-{name}-x86_64" / f"lib{name}.dylib",
         local_root / name / "lib" / f"lib{name}.dylib",
         local_root / f"lib{name}.dylib",
+        repo_root() / "artifacts" / "not_done" / "allocator_compare" / "allocators" / name / "lib" / f"lib{name}.dylib",
+        Path(f"/opt/homebrew/opt/{name}/lib/lib{name}.dylib"),
+        Path(f"/usr/local/opt/{name}/lib/lib{name}.dylib"),
         Path(f"/opt/homebrew/lib/lib{name}.dylib"),
         Path(f"/usr/local/lib/lib{name}.dylib"),
     ]
@@ -3330,25 +3505,18 @@ def run_allocator_compare(
         samples_ms: list[float] = []
         rss_samples: list[int] = []
         compile_errors = 0
+        last_stderr = ""
 
         obj = task_dir / f"bench_{mode}.o"
+        compile_cmd = [dmd, str(benchmark_file), "-c", f"-of={obj}", "-O"]
         for _ in range(warmups):
-            run_cmd(
-                ["/usr/bin/time", "-l", dmd, str(benchmark_file), "-c", f"-of={obj}", "-O"],
-                check=False,
-                timeout=timeout_sec,
-                env=env,
-            )
+            run_cmd(compile_cmd, check=False, timeout=timeout_sec, env=env)
 
         for _ in range(runs):
             t0 = time.perf_counter_ns()
-            cp = run_cmd(
-                ["/usr/bin/time", "-l", dmd, str(benchmark_file), "-c", f"-of={obj}", "-O"],
-                check=False,
-                timeout=timeout_sec,
-                env=env,
-            )
+            cp = run_cmd(compile_cmd, check=False, timeout=timeout_sec, env=env)
             elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+            last_stderr = cp.stderr
             if cp.returncode != 0:
                 compile_errors += 1
                 continue
@@ -3356,6 +3524,9 @@ def run_allocator_compare(
             if rss is not None:
                 rss_samples.append(rss)
             samples_ms.append(elapsed_ms)
+
+        if last_stderr:
+            (task_dir / f"{mode}_stderr.txt").write_text(last_stderr, encoding="utf-8")
 
         rows.append(
             {
@@ -3521,6 +3692,18 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float, perf_bi
         comparison_lines = [
             "# dmd -profile vs Linux perf",
             "",
+            "## Comparison topology",
+            "",
+            *emit_mermaid_block(
+                [
+                    "flowchart TD",
+                    '    A["profiled executable"] --> B["trace.log + trace.def"]',
+                    '    A --> C["perf stat / record / report"]',
+                    '    B --> D["comparison_report.md"]',
+                    '    C --> D',
+                ]
+            ),
+            "",
             f"- Profiler binary: `{resolved_perf}`",
             f"- Trace log lines: {trace_lines}",
             f"- trace.def exists: {int(trace_def.exists())}",
@@ -3571,6 +3754,18 @@ def run_dmd_profile_compare(out_dir: Path, dmd: str, timeout_sec: float, perf_bi
         sample_lines = len(sample_file.read_text(encoding="utf-8", errors="ignore").splitlines()) if sample_file.exists() else 0
         comparison_lines = [
             "# dmd -profile vs sample",
+            "",
+            "## Comparison topology",
+            "",
+            *emit_mermaid_block(
+                [
+                    "flowchart TD",
+                    '    A["profiled executable"] --> B["trace.log + trace.def"]',
+                    '    A --> C["sample capture"]',
+                    '    B --> D["comparison_report.md"]',
+                    '    C --> D',
+                ]
+            ),
             "",
             f"- Trace log lines: {trace_lines}",
             f"- trace.def exists: {int(trace_def.exists())}",
@@ -3664,6 +3859,23 @@ def render_status_report(path: Path, results: list[dict[str, object]]) -> None:
         "",
         f"Generated: {now_utc()}",
         "",
+        "This is the top-level execution view for the current not-done sweep.",
+        "",
+        "## Execution topology",
+        "",
+        *emit_mermaid_block(
+            [
+                "flowchart TD",
+                '    A["selected tasks\\nphase or explicit list"] --> B["task runners\\nPython experiments + shell tools"]',
+                '    B --> C["per-task folders\\nreport.csv/log artifacts"]',
+                '    B --> D["status.csv\\nmachine-readable state"]',
+                '    B --> E["manifest.json\\narguments + tool versions"]',
+                '    D --> F["status.md\\nreader summary"]',
+                '    C --> F',
+                '    E --> F',
+            ]
+        ),
+        "",
         "| Task | Status | Key result |",
         "|---|---|---|",
     ]
@@ -3707,6 +3919,20 @@ def render_runtime_libs_report(out_dir: Path, results: list[dict[str, object]]) 
 
     lines = [
         "# Runtime-library benchmark aggregate",
+        "",
+        "This page pulls the three runtime-library micro-benchmarks into one small navigation layer.",
+        "",
+        "## Aggregate topology",
+        "",
+        *emit_mermaid_block(
+            [
+                "flowchart TD",
+                '    A["gc_kernels/report.md"] --> D["runtime_libs_report.md"]',
+                '    B["aa_kernels/report.md"] --> D',
+                '    C["float_to_string_kernels/report.md"] --> D',
+                '    E["status.csv\\nper-task pass/fail"] --> D',
+            ]
+        ),
         "",
         *emit_markdown_table(["Task", "Status", "Artifact"], rows),
     ]
@@ -3752,6 +3978,13 @@ def parse_args() -> argparse.Namespace:
         help="Path to the checked-in workspace used to benchmark dub with PGO",
     )
     parser.add_argument("--dub-upstream-ref", default="master", help="Git ref for dlang/dub used in the PGO benchmark")
+    parser.add_argument(
+        "--dub-upstream-source",
+        choices=["cached", "bootstrap", "path"],
+        default="cached",
+        help="How to resolve dlang/dub source for the PGO benchmark",
+    )
+    parser.add_argument("--dub-upstream-path", default="", help="Explicit local dlang/dub checkout when --dub-upstream-source=path")
 
     parser.add_argument("--zero-cost-runs", type=int, default=9, help="Measured runs per mode")
     parser.add_argument("--zero-cost-warmups", type=int, default=2, help="Warmup runs per mode")
@@ -3859,6 +4092,7 @@ def main() -> int:
     dmd_repo = Path(args.dmd_repo).expanduser().resolve()
     benchmark_file = Path(args.benchmark).expanduser().resolve()
     dub_pgo_workspace = Path(args.dub_pgo_workspace).expanduser().resolve()
+    dub_upstream_path = Path(args.dub_upstream_path).expanduser().resolve() if args.dub_upstream_path else None
 
     tasks_need_ldc2 = {
         "zero_cost",
@@ -3966,6 +4200,8 @@ def main() -> int:
             clone_timeout=args.clone_timeout,
             workspace_root=dub_pgo_workspace,
             upstream_ref=args.dub_upstream_ref,
+            upstream_source=args.dub_upstream_source,
+            upstream_path=dub_upstream_path,
         ),
         "non_zero_init_structs": lambda: run_non_zero_init_struct_scan(
             out_dir=out_dir,
