@@ -1,0 +1,2 @@
+window,from_version,to_version,from_median_ms,to_median_ms,from_stdev_ms,to_stdev_ms,from_n,to_n,delta_pct,distributions_overlap,verdict,method,benchmark,command,host
+2.093.1->2.094.0,2.093.1,2.094.0,1113,754,99,139,40,40,-32.3,True,CONFIRMED IMPROVEMENT,paired-alternating 10-warmup 40-measured,benchmark.d,arch -x86_64 dmd benchmark.d -O -c,MacBook-Air-Apple-M4-macOS-arm64
